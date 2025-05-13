@@ -42,7 +42,7 @@ def get_emotion_context(user_id):
 async def generate_a2_response(user_input, trust_level, user_id):
     context = A2_PERSONA + f"\nTrust Level: {trust_level}/5\n" + get_emotion_context(user_id)
     try:
-        response = await openai.ChatCompletion.acreate(
+        response = await openai.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": context},
@@ -131,4 +131,3 @@ async def on_reaction_add(reaction, user):
         await channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
 
 bot.run(DISCORD_BOT_TOKEN)
-
