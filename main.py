@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+
+# Set up OpenAI client for latest SDK
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -40,7 +42,7 @@ def get_emotion_context(user_id):
 async def generate_a2_response(user_input, trust_level, user_id):
     context = A2_PERSONA + f"\nTrust Level: {trust_level}/5\n" + get_emotion_context(user_id)
     try:
-        response = openai.ChatCompletion.create(
+        response = await client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": context},
