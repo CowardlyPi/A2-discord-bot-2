@@ -227,7 +227,7 @@ async def on_message(message):
                 return "You matter to her deeply. She’d never say it, though."
 
         affection_report = (
-            "Tch... fine.
+            f"Tch... fine.
 "
             f"Trust: {round(e['trust'], 2)}/10
 "
@@ -240,6 +240,7 @@ async def on_message(message):
             f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
 "
             f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
+        )
         )
         )
         )
