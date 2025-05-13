@@ -12,7 +12,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
 
-# Initialize OpenAI client (supports sk-proj keys)
+# Initialize OpenAI client (sync client required for current SDK)
 client = OpenAI(
     api_key=OPENAI_API_KEY,
     organization=OPENAI_ORG_ID,
@@ -45,10 +45,10 @@ def get_emotion_context(user_id):
         context += "They’ve hurt you before. You don’t forgive easily.\n"
     return context
 
-async def generate_a2_response(user_input, trust_level, user_id):
+def generate_a2_response_sync(user_input, trust_level, user_id):
     context = A2_PERSONA + f"\nTrust Level: {trust_level}/5\n" + get_emotion_context(user_id)
     try:
-        response = await client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": context},
@@ -61,6 +61,9 @@ async def generate_a2_response(user_input, trust_level, user_id):
     except Exception as e:
         print("OpenAI Error:", e)
         return "...I’m not in the mood."
+
+async def generate_a2_response(user_input, trust_level, user_id):
+    return await asyncio.to_thread(generate_a2_response_sync, user_input, trust_level, user_id)
 
 @bot.event
 async def on_ready():
