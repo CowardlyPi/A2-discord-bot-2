@@ -5,7 +5,7 @@ import os
 import asyncio
 import re
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 # Load API keys from environment
@@ -68,7 +68,7 @@ def apply_reaction_modifiers(content, user_id):
             "guilt_triggered": False,
             "protectiveness": 0,
             "affection_points": 0,
-            "last_interaction": datetime.utcnow().isoformat()
+            "last_interaction": datetime.now(timezone.utc).isoformat()
         }
 
     for pattern, effects in reaction_modifiers:
@@ -80,7 +80,7 @@ def apply_reaction_modifiers(content, user_id):
                     user_emotions[user_id][emotion] = max(0, min(10, user_emotions[user_id][emotion] + change))
 
     user_emotions[user_id]["trust"] = min(user_emotions[user_id]["trust"] + 0.25, 10)
-    user_emotions[user_id]["last_interaction"] = datetime.utcnow().isoformat()
+    user_emotions[user_id]["last_interaction"] = datetime.now(timezone.utc).isoformat()
 
     affection_keywords = {
         "2b": -3,
@@ -157,7 +157,7 @@ async def on_ready():
 
 @tasks.loop(minutes=10)
 async def check_inactive_users():
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for guild in bot.guilds:
         for member in guild.members:
             if member.bot:
@@ -178,78 +178,6 @@ async def check_inactive_users():
                     continue
 
 @bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
-
-    user_id = message.author.id
-    content = message.content.strip()
-
-    apply_reaction_modifiers(content, user_id)
-    trust_level = user_emotions[user_id]["trust"]
-
-    if "a2 test react" in content.lower():
-        await message.add_reaction("🔥")
-    if "a2 test mention" in content.lower():
-        await message.channel.send(f"{message.author.mention} Tch. You needed something?")
-    if "a2 test reply" in content.lower():
-        await message.reply("Hmph. This better be worth my time.")
-        return
-
-    if "protect" in content.lower():
-        await message.add_reaction("🛡️")
-    elif "2b" in content.lower():
-        await message.add_reaction("…")
-    elif "hate" in content.lower():
-        await message.add_reaction("😒")
-
-    if content.lower() == "affection":
-        e = user_emotions[user_id]
-
-        def describe(value):
-            if value <= -50:
-                return "She can barely tolerate you."
-            elif value < 0:
-                return "She’s wary and cold."
-            elif value < 200:
-                return "You’re mostly ignored."
-            elif value < 400:
-                return "She’s paying attention."
-            elif value < 600:
-                return "She respects you, maybe more."
-            elif value < 800:
-                return "She trusts you. This is rare."
-            else:
-                return "You matter to her deeply. She’d never say it, though."
-
-        affection_report = f"""Tch... fine.
-Trust: {round(e['trust'], 2)}/10
-Attachment: {e['attachment']}/10
-Protectiveness: {e['protectiveness']}/10
-Resentment: {e['resentment']}/10
-Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
-Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"""
-
-        await message.channel.send(f"A2: {affection_report}")
-        return
-
-    mentions = [member.mention for member in message.mentions if not member.bot]
-    mention_text = f" You mentioned {', '.join(mentions)}." if mentions else ""
-
-    if message.reference:
-        try:
-            replied_to = await message.channel.fetch_message(message.reference.message_id)
-            reply_context = f" You replied to: \"{replied_to.content}\""
-        except:
-            reply_context = ""
-    else:
-        reply_context = ""
-
-    full_input = content + mention_text + reply_context
-    response = await generate_a2_response(full_input, trust_level, user_id)
-    await message.channel.send(f"A2: {response}")
-
-@bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
@@ -258,7 +186,15 @@ async def on_reaction_add(reaction, user):
     user_id = user.id
 
     if user_id not in user_emotions:
-        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0, "affection_points": 0, "last_interaction": datetime.utcnow().isoformat()}
+        user_emotions[user_id] = {
+            "trust": 0,
+            "resentment": 0,
+            "attachment": 0,
+            "guilt_triggered": False,
+            "protectiveness": 0,
+            "affection_points": 0,
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
 
     if str(reaction.emoji) in ["❤️", "💖", "💕"]:
         user_emotions[user_id]["attachment"] += 1
@@ -269,5 +205,3 @@ async def on_reaction_add(reaction, user):
     if reaction.message.author == bot.user:
         channel = message.channel
         await channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
-
-bot.run(DISCORD_BOT_TOKEN)
