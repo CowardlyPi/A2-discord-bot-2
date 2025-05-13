@@ -226,15 +226,35 @@ async def on_message(message):
             else:
                 return "You matter to her deeply. She’d never say it, though."
 
-    affection_report = (
-    f"Tch... fine.\n"
-    f"Trust: {round(e['trust'], 2)}/10\n"
-    f"Attachment: {e['attachment']}/10\n"
-    f"Protectiveness: {e['protectiveness']}/10\n"
-    f"Resentment: {e['resentment']}/10\n"
-    f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
+        affection_report = (
+    f"Tch... fine.
+"
+    f"Trust: {round(e['trust'], 2)}/10
+"
+    f"Attachment: {e['attachment']}/10
+"
+    f"Protectiveness: {e['protectiveness']}/10
+"
+    f"Resentment: {e['resentment']}/10
+"
+    f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
+"
     f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-)
+)}/10
+"
+            f"Attachment: {e['attachment']}/10
+"
+            f"Protectiveness: {e['protectiveness']}/10
+"
+            f"Resentment: {e['resentment']}/10
+"
+            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
+"
+            f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
+        )
+        )
+        )
+        )
         await message.channel.send(f"A2: {affection_report}")
         return
 
