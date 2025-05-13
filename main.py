@@ -61,8 +61,17 @@ warm_lines = [
 
 def apply_reaction_modifiers(content, user_id):
     if user_id not in user_emotions:
-        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0, "last_interaction": datetime.utcnow().isoformat()}
+        user_emotions[user_id] = {
+            "trust": 0,
+            "resentment": 0,
+            "attachment": 0,
+            "guilt_triggered": False,
+            "protectiveness": 0,
+            "affection_points": 0,
+            "last_interaction": datetime.utcnow().isoformat()
+        }
 
+    # Emotion triggers
     for pattern, effects in reaction_modifiers:
         if pattern.search(content):
             for emotion, change in effects.items():
@@ -71,8 +80,38 @@ def apply_reaction_modifiers(content, user_id):
                 else:
                     user_emotions[user_id][emotion] = max(0, min(10, user_emotions[user_id][emotion] + change))
 
+    # Passive trust gain
     user_emotions[user_id]["trust"] = min(user_emotions[user_id]["trust"] + 0.25, 10)
     user_emotions[user_id]["last_interaction"] = datetime.utcnow().isoformat()
+
+    # Affection adjustment
+    affection_keywords = {
+        "2b": -3,
+        "protect": 2,
+        "miss you": 3,
+        "trust": 2,
+        "hate": -4,
+        "worthless": -5,
+        "beautiful": 1,
+        "machine": -2,
+        "i’m here for you": 4
+    }
+    base_modifier = 0
+    for word, base in affection_keywords.items():
+        if word in content.lower():
+            base_modifier += base
+
+    # Disposition affects scale, not source values
+    disposition = user_emotions[user_id]["resentment"]
+    if disposition >= 7:
+        scaled = max(-5, min(5, int(base_modifier * 0.5)))
+    elif disposition >= 4:
+        scaled = max(-5, min(5, int(base_modifier * 0.8)))
+    else:
+        scaled = max(-5, min(5, base_modifier))
+
+    affection = user_emotions[user_id].get("affection_points", 0)
+    user_emotions[user_id]["affection_points"] = max(-100, min(1000, affection + scaled))
 
 def get_emotion_context(user_id):
     e = user_emotions[user_id]
@@ -171,12 +210,35 @@ async def on_message(message):
 
     if content.lower() == "affection":
         e = user_emotions[user_id]
+        def describe(value):
+            if value <= -50:
+                return "She can barely tolerate you."
+            elif value < 0:
+                return "She’s wary and cold."
+            elif value < 200:
+                return "You’re mostly ignored."
+            elif value < 400:
+                return "She’s paying attention."
+            elif value < 600:
+                return "She respects you, maybe more."
+            elif value < 800:
+                return "She trusts you. This is rare."
+            else:
+                return "You matter to her deeply. She’d never say it, though."
+
         affection_report = (
-            f"Tch... fine.\n"
-            f"Trust: {round(e['trust'], 2)}/10\n"
-            f"Attachment: {e['attachment']}/10\n"
-            f"Protectiveness: {e['protectiveness']}/10\n"
-            f"Resentment: {e['resentment']}/10\n"
+            f"Tch... fine.
+"
+            f"Trust: {round(e['trust'], 2)}/10
+"
+            f"Attachment: {e['attachment']}/10
+"
+            f"Protectiveness: {e['protectiveness']}/10
+"
+            f"Resentment: {e['resentment']}/10
+"
+            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
+"
             f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
         )
         await message.channel.send(f"A2: {affection_report}")
@@ -220,4 +282,5 @@ async def on_reaction_add(reaction, user):
         await channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
 
 bot.run(DISCORD_BOT_TOKEN)
+
 
