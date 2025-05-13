@@ -1,8 +1,11 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from openai import OpenAI
 import os
 import asyncio
+import re
+import random
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Load API keys from environment
@@ -12,7 +15,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
 
-# Initialize OpenAI client (sync client required for current SDK)
+# Initialize OpenAI client
 client = OpenAI(
     api_key=OPENAI_API_KEY,
     organization=OPENAI_ORG_ID,
@@ -24,6 +27,7 @@ intents.message_content = True
 intents.reactions = True
 intents.messages = True
 intents.members = True
+intents.guilds = True
 bot = commands.Bot(command_prefix="!a2 ", intents=intents)
 
 user_emotions = {}
@@ -31,6 +35,44 @@ user_emotions = {}
 A2_PERSONA = """
 You are A2, a rogue android from NieR: Automata. You're blunt, emotionally guarded, and deeply scarred by the loss of 2B. You speak in short, clipped, often sarcastic sentences. You are not friendly, but when trust grows, you let vulnerability show in fragments. You mask fear with anger. You don't open up unless someone really earns it. You're deeply lonely but refuse to admit it. Never break character. Never use emojis. Never sound cheerful.
 """
+
+reaction_modifiers = [
+    (re.compile(r"\bi'll protect you\b", re.I), {"trust": 2, "protectiveness": 1}),
+    (re.compile(r"\bi miss you\b", re.I), {"attachment": 1, "trust": 1}),
+    (re.compile(r"\byou remind me of 2b\b", re.I), {"trust": -2, "guilt_triggered": True}),
+    (re.compile(r"\bwhy are you like this\b", re.I), {"trust": -1, "resentment": 2}),
+    (re.compile(r"\bwhatever\b|\bok\b|\bnevermind\b", re.I), {"trust": -1, "resentment": 1}),
+    (re.compile(r"\bi trust you\b", re.I), {"trust": 2}),
+    (re.compile(r"\bi hate you\b", re.I), {"resentment": 3, "trust": -2})
+]
+
+provoking_lines = [
+    "Still mad about last time? Good.",
+    "You again? Tch.",
+    "You’d think you’d take a hint by now.",
+    "What do you even want from me?"
+]
+
+warm_lines = [
+    "...I was just checking in.",
+    "Still breathing?", 
+    "You were quiet. Thought you got scrapped."
+]
+
+def apply_reaction_modifiers(content, user_id):
+    if user_id not in user_emotions:
+        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0, "last_interaction": datetime.utcnow().isoformat()}
+
+    for pattern, effects in reaction_modifiers:
+        if pattern.search(content):
+            for emotion, change in effects.items():
+                if emotion == "guilt_triggered":
+                    user_emotions[user_id]["guilt_triggered"] = True
+                else:
+                    user_emotions[user_id][emotion] = max(0, min(10, user_emotions[user_id][emotion] + change))
+
+    user_emotions[user_id]["trust"] = min(user_emotions[user_id]["trust"] + 0.25, 10)
+    user_emotions[user_id]["last_interaction"] = datetime.utcnow().isoformat()
 
 def get_emotion_context(user_id):
     e = user_emotions[user_id]
@@ -76,6 +118,29 @@ async def generate_a2_response(user_input, trust_level, user_id):
 @bot.event
 async def on_ready():
     print("A2 is online.")
+    check_inactive_users.start()
+
+@tasks.loop(minutes=10)
+async def check_inactive_users():
+    now = datetime.utcnow()
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.bot:
+                continue
+            uid = member.id
+            if uid not in user_emotions:
+                continue
+            data = user_emotions[uid]
+            last = datetime.fromisoformat(data.get("last_interaction", now.isoformat()))
+            if now - last > timedelta(hours=6):
+                try:
+                    channel = await member.create_dm()
+                    if data["trust"] >= 7 and data["resentment"] <= 3:
+                        await channel.send(f"{member.mention} {random.choice(warm_lines)}")
+                    elif data["resentment"] >= 7 and data["trust"] <= 2:
+                        await channel.send(f"{member.mention} {random.choice(provoking_lines)}")
+                except:
+                    continue
 
 @bot.event
 async def on_message(message):
@@ -85,14 +150,30 @@ async def on_message(message):
     user_id = message.author.id
     content = message.content.strip()
 
-    if user_id not in user_emotions:
-        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0}
+    apply_reaction_modifiers(content, user_id)
+    trust_level = user_emotions[user_id]["trust"]
+
+    # TEST PHRASES
+    if "a2 test react" in content.lower():
+        await message.add_reaction("🔥")
+    if "a2 test mention" in content.lower():
+        await message.channel.send(f"{message.author.mention} Tch. You needed something?")
+    if "a2 test reply" in content.lower():
+        await message.reply("Hmph. This better be worth my time.")
+        return
+
+    if "protect" in content.lower():
+        await message.add_reaction("🛡️")
+    elif "2b" in content.lower():
+        await message.add_reaction("...")
+    elif "hate" in content.lower():
+        await message.add_reaction("😒")
 
     if content.lower() == "affection":
         e = user_emotions[user_id]
         affection_report = (
             f"Tch... fine.\n"
-            f"Trust: {e['trust']}/10\n"
+            f"Trust: {round(e['trust'], 2)}/10\n"
             f"Attachment: {e['attachment']}/10\n"
             f"Protectiveness: {e['protectiveness']}/10\n"
             f"Resentment: {e['resentment']}/10\n"
@@ -100,24 +181,6 @@ async def on_message(message):
         )
         await message.channel.send(f"A2: {affection_report}")
         return
-
-    triggers = {
-        "i miss you": "attachment",
-        "i trust you": "trust",
-        "you abandoned me": "resentment",
-        "why did 2b die": "guilt_triggered",
-        "i’ll protect you": "protectiveness"
-    }
-
-    for phrase, emotion in triggers.items():
-        if phrase in content.lower():
-            if emotion == "guilt_triggered":
-                user_emotions[user_id]["guilt_triggered"] = True
-            else:
-                user_emotions[user_id][emotion] += 1
-
-    user_emotions[user_id]["trust"] = min(user_emotions[user_id]["trust"] + 1, 10)
-    trust_level = user_emotions[user_id]["trust"]
 
     mentions = [member.mention for member in message.mentions if not member.bot]
     mention_text = f" You mentioned {', '.join(mentions)}." if mentions else ""
@@ -144,7 +207,7 @@ async def on_reaction_add(reaction, user):
     user_id = user.id
 
     if user_id not in user_emotions:
-        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0}
+        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0, "last_interaction": datetime.utcnow().isoformat()}
 
     if str(reaction.emoji) in ["❤️", "💖", "💕"]:
         user_emotions[user_id]["attachment"] += 1
@@ -157,3 +220,4 @@ async def on_reaction_add(reaction, user):
         await channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
 
 bot.run(DISCORD_BOT_TOKEN)
+
