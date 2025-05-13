@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import openai
+from openai import OpenAI
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -9,9 +9,15 @@ from dotenv import load_dotenv
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
+OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
 
-# Set OpenAI API key
-openai.api_key = OPENAI_API_KEY
+# Initialize OpenAI client (supports sk-proj keys)
+client = OpenAI(
+    api_key=OPENAI_API_KEY,
+    organization=OPENAI_ORG_ID,
+    project=OPENAI_PROJECT_ID
+)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -42,7 +48,7 @@ def get_emotion_context(user_id):
 async def generate_a2_response(user_input, trust_level, user_id):
     context = A2_PERSONA + f"\nTrust Level: {trust_level}/5\n" + get_emotion_context(user_id)
     try:
-        response = await openai.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": context},
