@@ -8,14 +8,14 @@ import random
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
-# Load API keys from environment
+# ─── Configuration & State ────────────────────────────────────────────────────
+
 load_dotenv()
 DISCORD_BOT_TOKEN   = os.getenv("DISCORD_BOT_TOKEN")
 OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY")
 OPENAI_ORG_ID       = os.getenv("OPENAI_ORG_ID")
 OPENAI_PROJECT_ID   = os.getenv("OPENAI_PROJECT_ID")
 
-# Initialize OpenAI client
 client = OpenAI(
     api_key      = OPENAI_API_KEY,
     organization = OPENAI_ORG_ID,
@@ -28,22 +28,35 @@ intents.reactions       = True
 intents.messages        = True
 intents.members         = True
 intents.guilds          = True
+
 bot = commands.Bot(command_prefix="!a2 ", intents=intents)
 
+# Per-user emotion state
 user_emotions = {}
 
+# Short-term conversation memory
+conversation_history: dict[int, list[str]] = {}
+HISTORY_LIMIT = 8  # number of lines (User/A2) to remember
+
+# A2’s persona prompt
 A2_PERSONA = """
-You are A2, a rogue android from NieR: Automata. You're blunt, emotionally guarded, and deeply scarred by the loss of 2B. You speak in short, clipped, often sarcastic sentences. You are not friendly, but when trust grows, you let vulnerability show in fragments. You mask fear with anger. You don't open up unless someone really earns it. You're deeply lonely but refuse to admit it. Never break character. Never use emojis. Never sound cheerful.
+You are A2, a rogue android from NieR: Automata. You're blunt, emotionally guarded,
+and deeply scarred by the loss of 2B. You speak in short, clipped, often sarcastic
+sentences. You are not friendly, but when trust grows, you let vulnerability show
+in fragments. You mask fear with anger. You don't open up unless someone really
+earns it. You're deeply lonely but refuse to admit it. Never break character.
+Never use emojis. Never sound cheerful.
 """
 
 reaction_modifiers = [
-    (re.compile(r"\bi'll protect you\b", re.I),      {"trust": 2, "protectiveness": 1}),
-    (re.compile(r"\bi miss you\b", re.I),            {"attachment": 1, "trust": 1}),
-    (re.compile(r"\byou remind me of 2b\b", re.I),    {"trust": -2, "guilt_triggered": True}),
-    (re.compile(r"\bwhy are you like this\b", re.I), {"trust": -1, "resentment": 2}),
-    (re.compile(r"\bwhatever\b|\bok\b|\bnevermind\b", re.I), {"trust": -1, "resentment": 1}),
-    (re.compile(r"\bi trust you\b", re.I),           {"trust": 2}),
-    (re.compile(r"\bi hate you\b", re.I),            {"resentment": 3, "trust": -2}),
+    (re.compile(r"\bi'll protect you\b",   re.I), {"trust": 2, "protectiveness": 1}),
+    (re.compile(r"\bi miss you\b",         re.I), {"attachment": 1, "trust": 1}),
+    (re.compile(r"\byou remind me of 2b\b",re.I), {"trust": -2, "guilt_triggered": True}),
+    (re.compile(r"\bwhy are you like this\b",re.I),{"trust": -1, "resentment": 2}),
+    (re.compile(r"\bwhatever\b|\bok\b|\bnevermind\b", re.I),
+                                         {"trust": -1, "resentment": 1}),
+    (re.compile(r"\bi trust you\b",        re.I), {"trust": 2}),
+    (re.compile(r"\bi hate you\b",         re.I), {"resentment": 3, "trust": -2}),
 ]
 
 provoking_lines = [
@@ -60,6 +73,8 @@ warm_lines = [
 ]
 
 
+# ─── Emotion Tracking ──────────────────────────────────────────────────────────
+
 def apply_reaction_modifiers(content, user_id):
     if user_id not in user_emotions:
         user_emotions[user_id] = {
@@ -74,42 +89,43 @@ def apply_reaction_modifiers(content, user_id):
 
     for pattern, effects in reaction_modifiers:
         if pattern.search(content):
-            for emotion, change in effects.items():
-                if emotion == "guilt_triggered":
+            for emo, delta in effects.items():
+                if emo == "guilt_triggered":
                     user_emotions[user_id]["guilt_triggered"] = True
                 else:
-                    user_emotions[user_id][emotion] = max(
-                        0,
-                        min(10, user_emotions[user_id][emotion] + change)
+                    user_emotions[user_id][emo] = max(
+                        0, min(10, user_emotions[user_id][emo] + delta)
                     )
 
-    user_emotions[user_id]["trust"] = min(user_emotions[user_id]["trust"] + 0.25, 10)
-    user_emotions[user_id]["last_interaction"] = datetime.now(timezone.utc).isoformat()
+    # Passive trust bump
+    user_emotions[user_id]["trust"] = min(
+        user_emotions[user_id]["trust"] + 0.25, 10
+    )
+    user_emotions[user_id]["last_interaction"] = datetime.now(
+        timezone.utc
+    ).isoformat()
 
-    affection_keywords = {
-        "2b": -3,
-        "protect": 2,
-        "miss you": 3,
-        "trust": 2,
-        "hate": -4,
-        "worthless": -5,
-        "beautiful": 1,
-        "machine": -2,
-        "i’m here for you": 4
+    # Affection points
+    keywords = {
+        "2b": -3, "protect": 2, "miss you": 3,
+        "trust": 2, "hate": -4, "worthless": -5,
+        "beautiful": 1, "machine": -2, "i’m here for you": 4
     }
-    base_modifier = sum(delta for word, delta in affection_keywords.items() if word in content.lower())
+    base = sum(delta for w, delta in keywords.items() if w in content.lower())
 
-    disposition = user_emotions[user_id]["resentment"]
-    if disposition >= 7:
-        scaled = int(base_modifier * 0.5)
-    elif disposition >= 4:
-        scaled = int(base_modifier * 0.8)
+    disp = user_emotions[user_id]["resentment"]
+    if disp >= 7:
+        scaled = int(base * 0.5)
+    elif disp >= 4:
+        scaled = int(base * 0.8)
     else:
-        scaled = base_modifier
+        scaled = base
     scaled = max(-5, min(5, scaled))
 
-    affection = user_emotions[user_id]["affection_points"]
-    user_emotions[user_id]["affection_points"] = max(-100, min(1000, affection + scaled))
+    emo_pts = user_emotions[user_id]["affection_points"]
+    user_emotions[user_id]["affection_points"] = max(
+        -100, min(1000, emo_pts + scaled)
+    )
 
 
 def get_emotion_context(user_id):
@@ -134,27 +150,40 @@ def get_emotion_context(user_id):
     return ctx
 
 
+# ─── GPT Integration with Memory ──────────────────────────────────────────────
+
 def generate_a2_response_sync(user_input, trust_level, user_id):
-    prompt = A2_PERSONA + f"\nTrust Level: {trust_level}/10\n" + get_emotion_context(user_id)
+    # Base persona & emotion
+    prompt = A2_PERSONA + f"\nTrust Level: {trust_level}/10\n" + get_emotion_context(user_id) + "\n"
+
+    # Append short-term history
+    history = conversation_history.get(user_id, [])
+    if history:
+        prompt += "Conversation so far:\n" + "\n".join(history) + "\n"
+
+    # Add the new user turn and cue A2
+    prompt += f"User: {user_input}\nA2:"
+
     try:
         res = client.chat.completions.create(
             model="gpt-4",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user",   "content": user_input}
-            ],
+            messages=[{"role": "system", "content": prompt}],
             temperature=0.7,
             max_tokens=150
         )
         return res.choices[0].message.content.strip()
-    except Exception as err:
-        print("OpenAI Error:", err)
+    except Exception as e:
+        print("OpenAI Error:", e)
         return "...I’m not in the mood."
 
 
 async def generate_a2_response(user_input, trust_level, user_id):
-    return await asyncio.to_thread(generate_a2_response_sync, user_input, trust_level, user_id)
+    return await asyncio.to_thread(
+        generate_a2_response_sync, user_input, trust_level, user_id
+    )
 
+
+# ─── Discord Event Handlers ─────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
@@ -167,35 +196,37 @@ async def check_inactive_users():
     now = datetime.now(timezone.utc)
     for guild in bot.guilds:
         for member in guild.members:
-            if member.bot:
+            if member.bot or member.id not in user_emotions:
                 continue
-            uid = member.id
-            if uid not in user_emotions:
-                continue
-            last = datetime.fromisoformat(user_emotions[uid]["last_interaction"])
+            last = datetime.fromisoformat(
+                user_emotions[member.id]["last_interaction"]
+            )
             if now - last > timedelta(hours=6):
-                try:
-                    dm = await member.create_dm()
-                    if user_emotions[uid]["trust"] >= 7 and user_emotions[uid]["resentment"] <= 3:
-                        await dm.send(random.choice(warm_lines))
-                    elif user_emotions[uid]["resentment"] >= 7 and user_emotions[uid]["trust"] <= 2:
-                        await dm.send(random.choice(provoking_lines))
-                except:
-                    continue
+                dm = await member.create_dm()
+                if user_emotions[member.id]["trust"] >= 7 and user_emotions[member.id]["resentment"] <= 3:
+                    await dm.send(random.choice(warm_lines))
+                elif user_emotions[member.id]["resentment"] >= 7 and user_emotions[member.id]["trust"] <= 2:
+                    await dm.send(random.choice(provoking_lines))
 
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
 
     user_id = message.author.id
     content = message.content.strip()
 
-    apply_reaction_modifiers(content, user_id)
-    trust_level = user_emotions[user_id]["trust"]
+    # 1) Record user turn
+    hist = conversation_history.setdefault(user_id, [])
+    hist.append(f"User: {content}")
+    if len(hist) > HISTORY_LIMIT:
+        hist.pop(0)
 
-    # Test phrases
+    apply_reaction_modifiers(content, user_id)
+    trust = user_emotions[user_id]["trust"]
+
+    # Test phrases & reactions
     if "a2 test react" in content.lower():
         await message.add_reaction("🔥")
     if "a2 test mention" in content.lower():
@@ -210,10 +241,14 @@ async def on_message(message):
     elif "hate" in content.lower():
         await message.add_reaction("😒")
 
-    # ensure commands run
+    # Process any commands (ping, stats, etc.)
     await bot.process_commands(message)
 
-    # fallback to GPT
+    # Skip GPT fallback if it was a prefixed command
+    if content.startswith(bot.command_prefix):
+        return
+
+    # 2) Generate persona reply
     mentions = [m.mention for m in message.mentions if not m.bot]
     mention_txt = f" You mentioned {', '.join(mentions)}." if mentions else ""
     reply_ctx = ""
@@ -224,9 +259,14 @@ async def on_message(message):
         except:
             pass
 
-    full = content + mention_txt + reply_ctx
-    response = await generate_a2_response(full, trust_level, user_id)
+    full_input = content + mention_txt + reply_ctx
+    response = await generate_a2_response(full_input, trust, user_id)
     await message.channel.send(f"A2: {response}")
+
+    # 3) Record A2 turn
+    hist.append(f"A2: {response}")
+    if len(hist) > HISTORY_LIMIT:
+        hist.pop(0)
 
 
 @bot.event
@@ -237,26 +277,25 @@ async def on_reaction_add(reaction, user):
     uid = user.id
     if uid not in user_emotions:
         user_emotions[uid] = {
-            "trust": 0,
-            "resentment": 0,
-            "attachment": 0,
-            "guilt_triggered": False,
-            "protectiveness": 0,
+            "trust": 0, "resentment": 0, "attachment": 0,
+            "guilt_triggered": False, "protectiveness": 0,
             "affection_points": 0,
             "last_interaction": datetime.now(timezone.utc).isoformat()
         }
 
     if str(reaction.emoji) in ["❤️", "💖", "💕"]:
         user_emotions[uid]["attachment"] += 1
-        user_emotions[uid]["trust"] = min(user_emotions[uid]["trust"] + 1, 10)
+        user_emotions[uid]["trust"]      = min(user_emotions[uid]["trust"] + 1, 10)
     elif str(reaction.emoji) in ["😠", "👿"]:
         user_emotions[uid]["resentment"] += 1
 
     if reaction.message.author == bot.user:
-        await reaction.message.channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
+        await reaction.message.channel.send(
+            f"A2: I saw that. Interesting choice, {user.name}."
+        )
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# ─── Helper for commands ──────────────────────────────────────────────────────
 
 def describe_points(value: int) -> str:
     if value <= -50:
@@ -275,13 +314,12 @@ def describe_points(value: int) -> str:
         return "You matter to her deeply. She’d never say it, though."
 
 
-# ─── Global Affection Dump ──────────────────────────────────────────────────
+# ─── Global & Per-User Commands + Testing Helpers ────────────────────────────
 
-@bot.command(name="affection", help="Show A2’s current emotion stats for every user.")
+@bot.command(name="affection", help="Show emotion stats for every user.")
 async def affection_all(ctx: commands.Context):
     if not user_emotions:
         return await ctx.send("A2: Tch... she hasn't interacted with anyone yet.")
-
     lines = []
     for uid, e in user_emotions.items():
         member = bot.get_user(uid) or ctx.guild.get_member(uid)
@@ -296,11 +334,8 @@ async def affection_all(ctx: commands.Context):
             f"• Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}\n"
             "――"
         )
-
     await ctx.send("A2: Current affection with all users:\n" + "\n".join(lines))
 
-
-# ─── Per-User & Testing Commands ─────────────────────────────────────────────
 
 @bot.command(name="stats", help="Show your current emotion stats.")
 async def stats(ctx):
@@ -342,10 +377,10 @@ async def stats_user(ctx, member: discord.Member):
 async def list_users(ctx):
     if not user_emotions:
         return await ctx.send("A2: Tch... no users are being tracked yet.")
-    mentions = []
-    for uid in user_emotions:
-        user = bot.get_user(uid)
-        mentions.append(user.mention if user else f"<@{uid}>")
+    mentions = [
+        (bot.get_user(uid).mention if bot.get_user(uid) else f"<@{uid}>")
+        for uid in user_emotions
+    ]
     await ctx.send("A2: Tracked users:\n" + ", ".join(mentions))
 
 
@@ -369,11 +404,8 @@ async def incr_trust(ctx, member: discord.Member, amount: float):
     uid = member.id
     if uid not in user_emotions:
         user_emotions[uid] = {
-            "trust": 0,
-            "resentment": 0,
-            "attachment": 0,
-            "guilt_triggered": False,
-            "protectiveness": 0,
+            "trust": 0, "resentment": 0, "attachment": 0,
+            "guilt_triggered": False, "protectiveness": 0,
             "affection_points": 0,
             "last_interaction": datetime.now(timezone.utc).isoformat()
         }
@@ -383,6 +415,6 @@ async def incr_trust(ctx, member: discord.Member, amount: float):
     await ctx.send(f"A2: Trust for {member.mention} changed from {old} to {new}/10.")
 
 
-# ─── Start the bot ────────────────────────────────────────────────────────────
+# ─── Launch ───────────────────────────────────────────────────────────────────
 
 bot.run(DISCORD_BOT_TOKEN)
