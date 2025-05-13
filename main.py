@@ -241,6 +241,7 @@ async def on_message(message):
 "
             f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
         )
+        )
         await message.channel.send(f"A2: {affection_report}")
         return
 
@@ -282,5 +283,3 @@ async def on_reaction_add(reaction, user):
         await channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
 
 bot.run(DISCORD_BOT_TOKEN)
-
-
