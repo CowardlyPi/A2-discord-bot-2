@@ -55,7 +55,7 @@ provoking_lines = [
 
 warm_lines = [
     "...I was just checking in.",
-    "Still breathing?", 
+    "Still breathing?",
     "You were quiet. Thought you got scrapped."
 ]
 
@@ -71,7 +71,6 @@ def apply_reaction_modifiers(content, user_id):
             "last_interaction": datetime.utcnow().isoformat()
         }
 
-    # Emotion triggers
     for pattern, effects in reaction_modifiers:
         if pattern.search(content):
             for emotion, change in effects.items():
@@ -80,11 +79,9 @@ def apply_reaction_modifiers(content, user_id):
                 else:
                     user_emotions[user_id][emotion] = max(0, min(10, user_emotions[user_id][emotion] + change))
 
-    # Passive trust gain
     user_emotions[user_id]["trust"] = min(user_emotions[user_id]["trust"] + 0.25, 10)
     user_emotions[user_id]["last_interaction"] = datetime.utcnow().isoformat()
 
-    # Affection adjustment
     affection_keywords = {
         "2b": -3,
         "protect": 2,
@@ -101,7 +98,6 @@ def apply_reaction_modifiers(content, user_id):
         if word in content.lower():
             base_modifier += base
 
-    # Disposition affects scale, not source values
     disposition = user_emotions[user_id]["resentment"]
     if disposition >= 7:
         scaled = max(-5, min(5, int(base_modifier * 0.5)))
@@ -192,7 +188,6 @@ async def on_message(message):
     apply_reaction_modifiers(content, user_id)
     trust_level = user_emotions[user_id]["trust"]
 
-    # TEST PHRASES
     if "a2 test react" in content.lower():
         await message.add_reaction("🔥")
     if "a2 test mention" in content.lower():
@@ -204,7 +199,7 @@ async def on_message(message):
     if "protect" in content.lower():
         await message.add_reaction("🛡️")
     elif "2b" in content.lower():
-        await message.add_reaction("...")
+        await message.add_reaction("…")
     elif "hate" in content.lower():
         await message.add_reaction("😒")
 
@@ -227,238 +222,15 @@ async def on_message(message):
             else:
                 return "You matter to her deeply. She’d never say it, though."
 
-        affection_report = (
-            "Tch... fine.
-"
-            f"Trust: {round(e['trust'], 2)}/10
-"
-            f"Attachment: {e['attachment']}/10
-"
-            f"Protectiveness: {e['protectiveness']}/10
-"
-            f"Resentment: {e['resentment']}/10
-"
-            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
-"
-            f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-        )
+        affection_report = f"""Tch... fine.
+Trust: {round(e['trust'], 2)}/10
+Attachment: {e['attachment']}/10
+Protectiveness: {e['protectiveness']}/10
+Resentment: {e['resentment']}/10
+Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
+Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"""
 
         await message.channel.send(f"A2: {affection_report}")
-        return "She can barely tolerate you."
-        elif value < 0:
-            return "She’s wary and cold."
-        elif value < 200:
-            return "You’re mostly ignored."
-        elif value < 400:
-            return "She’s paying attention."
-        elif value < 600:
-            return "She respects you, maybe more."
-        elif value < 800:
-            return "She trusts you. This is rare."
-        else:
-            return "You matter to her deeply. She’d never say it, though."
-
-    affection_report = (
-        "Tch... fine.
-"
-        f"Trust: {round(e['trust'], 2)}/10
-"
-        f"Attachment: {e['attachment']}/10
-"
-        f"Protectiveness: {e['protectiveness']}/10
-"
-        f"Resentment: {e['resentment']}/10
-"
-        f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
-"
-        f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-    )
-
-    await message.channel.send(f"A2: {affection_report}")
-    return "She can barely tolerate you."
-        elif value < 0:
-            return "She’s wary and cold."
-        elif value < 200:
-            return "You’re mostly ignored."
-        elif value < 400:
-            return "She’s paying attention."
-        elif value < 600:
-            return "She respects you, maybe more."
-        elif value < 800:
-            return "She trusts you. This is rare."
-        else:
-            return "You matter to her deeply. She’d never say it, though."
-
-    affection_report = (
-        "Tch... fine.
-"
-        f"Trust: {round(e['trust'], 2)}/10
-"
-        f"Attachment: {e['attachment']}/10
-"
-        f"Protectiveness: {e['protectiveness']}/10
-"
-        f"Resentment: {e['resentment']}/10
-"
-        f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
-"
-        f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-    )
-
-    await message.channel.send(f"A2: {affection_report}")
-    return "She can barely tolerate you."
-        elif value < 0:
-            return "She’s wary and cold."
-        elif value < 200:
-            return "You’re mostly ignored."
-        elif value < 400:
-            return "She’s paying attention."
-        elif value < 600:
-            return "She respects you, maybe more."
-        elif value < 800:
-            return "She trusts you. This is rare."
-        else:
-            return "You matter to her deeply. She’d never say it, though."
-
-affection_report = (
-    "Tch... fine.\n"
-    f"Trust: {round(e['trust'], 2)}/10\n"
-    f"Attachment: {e['attachment']}/10\n"
-    f"Protectiveness: {e['protectiveness']}/10\n"
-    f"Resentment: {e['resentment']}/10\n"
-    f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
-    f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-)
-
-
-    await message.channel.send(f"A2: {affection_report}")
-    return "She can barely tolerate you."
-        elif value < 0:
-            return "She’s wary and cold."
-        elif value < 200:
-            return "You’re mostly ignored."
-        elif value < 400:
-            return "She’s paying attention."
-        elif value < 600:
-            return "She respects you, maybe more."
-        elif value < 800:
-            return "She trusts you. This is rare."
-        else:
-            return "You matter to her deeply. She’d never say it, though."
-
-   affection_report = (
-    "Tch... fine.\n"
-    f"Trust: {round(e['trust'], 2)}/10\n"
-    f"Attachment: {e['attachment']}/10\n"
-    f"Protectiveness: {e['protectiveness']}/10\n"
-    f"Resentment: {e['resentment']}/10\n"
-    f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
-    f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-)
-
-    await message.channel.send(f"A2: {affection_report}")
-    return "She can barely tolerate you."
-        elif value < 0:
-            return "She’s wary and cold."
-        elif value < 200:
-            return "You’re mostly ignored."
-        elif value < 400:
-            return "She’s paying attention."
-        elif value < 600:
-            return "She respects you, maybe more."
-        elif value < 800:
-            return "She trusts you. This is rare."
-        else:
-            return "You matter to her deeply. She’d never say it, though."
-
-        def describe(value):
-            if value <= -50:
-                return "She can barely tolerate you."
-            elif value < 0:
-                return "She’s wary and cold."
-            elif value < 200:
-                return "You’re mostly ignored."
-            elif value < 400:
-                return "She’s paying attention."
-            elif value < 600:
-                return "She respects you, maybe more."
-            elif value < 800:
-                return "She trusts you. This is rare."
-            else:
-                return "You matter to her deeply. She’d never say it, though."
-
-        affection_report = (
-        "Tch... fine."
-        f"Trust: {round(e['trust'], 2)}/10"
-        f"Attachment: {e['attachment']}/10"
-        f"Protectiveness: {e['protectiveness']}/10"
-        f"Resentment: {e['resentment']}/10"
-        f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}"
-        f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}")}/10"
-            f"Attachment: {e['attachment']}/10"
-            f"Protectiveness: {e['protectiveness']}/10"
-            f"Resentment: {e['resentment']}/10"
-            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}"
-            f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}")}/10"
-            f"Attachment: {e['attachment']}/10"
-            f"Protectiveness: {e['protectiveness']}/10"
-            f"Resentment: {e['resentment']}/10"
-            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}"
-            f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-        )
-
-        await message.channel.send(f"A2: {affection_report}")
-        return "She can barely tolerate you."
-            elif value < 0:
-                return "She’s wary and cold."
-            elif value < 200:
-                return "You’re mostly ignored."
-            elif value < 400:
-                return "She’s paying attention."
-            elif value < 600:
-                return "She respects you, maybe more."
-            elif value < 800:
-                return "She trusts you. This is rare."
-            else:
-                return "You matter to her deeply. She’d never say it, though."
-
-   affection_report = (
-    "Tch... fine.\n"
-    f"Trust: {round(e['trust'], 2)}/10\n"
-    f"Attachment: {e['attachment']}/10\n"
-    f"Protectiveness: {e['protectiveness']}/10\n"
-    f"Resentment: {e['resentment']}/10\n"
-    f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
-    f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-)
-
-        await message.channel.send(f"A2: {affection_report}")
-        return "She can barely tolerate you."
-        elif value < 0:
-            return "She’s wary and cold."
-        elif value < 200:
-            return "You’re mostly ignored."
-        elif value < 400:
-            return "She’s paying attention."
-        elif value < 600:
-            return "She respects you, maybe more."
-        elif value < 800:
-            return "She trusts you. This is rare."
-        else:
-            return "You matter to her deeply. She’d never say it, though."
-
-    affection_report = (
-    "Tch... fine.\n"
-    f"Trust: {round(e['trust'], 2)}/10\n"
-    f"Attachment: {e['attachment']}/10\n"
-    f"Protectiveness: {e['protectiveness']}/10\n"
-    f"Resentment: {e['resentment']}/10\n"
-    f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
-    f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
-)
-
-    await message.channel.send(f"A2: {affection_report}")
-    return
         return
 
     mentions = [member.mention for member in message.mentions if not member.bot]
@@ -486,7 +258,7 @@ async def on_reaction_add(reaction, user):
     user_id = user.id
 
     if user_id not in user_emotions:
-        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0, "last_interaction": datetime.utcnow().isoformat()}
+        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "guilt_triggered": False, "protectiveness": 0, "affection_points": 0, "last_interaction": datetime.utcnow().isoformat()}
 
     if str(reaction.emoji) in ["❤️", "💖", "💕"]:
         user_emotions[user_id]["attachment"] += 1
