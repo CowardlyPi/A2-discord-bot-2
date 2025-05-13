@@ -208,7 +208,7 @@ async def on_message(message):
     elif "hate" in content.lower():
         await message.add_reaction("😒")
 
-if content.lower() == "affection":
+    if content.lower() == "affection":
     e = user_emotions[user_id]
 
     def describe(value):
@@ -228,12 +228,18 @@ if content.lower() == "affection":
             return "You matter to her deeply. She’d never say it, though."
 
     affection_report = (
-        f"Tch... fine.\n"
-        f"Trust: {round(e['trust'], 2)}/10\n"
-        f"Attachment: {e['attachment']}/10\n"
-        f"Protectiveness: {e['protectiveness']}/10\n"
-        f"Resentment: {e['resentment']}/10\n"
-        f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
+        f"Tch... fine.
+"
+        f"Trust: {round(e['trust'], 2)}/10
+"
+        f"Attachment: {e['attachment']}/10
+"
+        f"Protectiveness: {e['protectiveness']}/10
+"
+        f"Resentment: {e['resentment']}/10
+"
+        f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
+"
         f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
     )
 
