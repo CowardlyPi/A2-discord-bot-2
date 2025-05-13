@@ -235,10 +235,6 @@ async def on_message(message):
     f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
     f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
 )
-
-        )
-        )
-        )
         await message.channel.send(f"A2: {affection_report}")
         return
 
