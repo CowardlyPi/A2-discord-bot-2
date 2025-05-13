@@ -209,7 +209,7 @@ async def on_message(message):
         await message.add_reaction("😒")
 
     if content.lower() == "affection":
-    e = user_emotions[user_id]
+                e = user_emotions[user_id]
 
     def describe(value):
         if value <= -50:
