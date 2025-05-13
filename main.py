@@ -229,17 +229,11 @@ async def on_message(message):
 
         affection_report = (
             "Tch... fine.\n"
-"
-            f"Trust: {round(e['trust'], 2)}/10
-"
-            f"Attachment: {e['attachment']}/10
-"
-            f"Protectiveness: {e['protectiveness']}/10
-"
-            f"Resentment: {e['resentment']}/10
-"
-            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}
-"
+            f"Trust: {round(e['trust'], 2)}/10\n"
+            f"Attachment: {e['attachment']}/10\n"
+            f"Protectiveness: {e['protectiveness']}/10\n"
+            f"Resentment: {e['resentment']}/10\n"
+            f"Affection Points: {e['affection_points']} - {describe(e['affection_points'])}\n"
             f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
         )
 
