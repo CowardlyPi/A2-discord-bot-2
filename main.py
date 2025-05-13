@@ -238,7 +238,7 @@ if content.lower() == "affection":
     )
 
     await message.channel.send(f"A2: {affection_report}")
-
+    return
         return
 
     mentions = [member.mention for member in message.mentions if not member.bot]
