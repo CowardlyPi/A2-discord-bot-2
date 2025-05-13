@@ -228,7 +228,7 @@ async def on_message(message):
                 return "You matter to her deeply. She’d never say it, though."
 
         affection_report = (
-            f"Tch... fine.
+            "Tch... fine.
 "
             f"Trust: {round(e['trust'], 2)}/10
 "
