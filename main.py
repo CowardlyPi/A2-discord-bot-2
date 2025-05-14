@@ -78,7 +78,7 @@ async def save_data():
     """Save each user profile separately."""
     for uid in list(user_emotions.keys()):
         await save_user_profile(uid)
-)
+
             conversation_history   = {int(k): v for k, v in data.get("conversation_history", {}).items()}
             conversation_summaries = data.get("conversation_summaries", {})
         except json.JSONDecodeError:
