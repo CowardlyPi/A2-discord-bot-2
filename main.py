@@ -353,16 +353,11 @@ async def stats(ctx):
     if not e:
         return await ctx.send("A2: no data on you.")
     report = (
-        f"Trust: {e.get('trust',0)}/10
-"
-        f"Attachment: {e.get('attachment',0)}/10
-"
-        f"Protectiveness: {e.get('protectiveness',0)}/10
-"
-        f"Resentment: {e.get('resentment',0)}/10
-"
-        f"Affection: {e.get('affection_points',0)}
-"
+        f"Trust: {e.get('trust',0)}/10"
+        f"Attachment: {e.get('attachment',0)}/10"
+        f"Protectiveness: {e.get('protectiveness',0)}/10"
+        f"Resentment: {e.get('resentment',0)}/10"
+        f"Affection: {e.get('affection_points',0)}"
         f"Annoyance: {e.get('annoyance',0)}"
     )
     await ctx.send(f"A2: {report}")
