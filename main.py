@@ -244,18 +244,25 @@ async def on_command_error(ctx,error):
 
 @bot.event
 async def on_message(message):
-    if message.author.bot or message.content.startswith("A2:"): return
-    uid,content=message.author.id,message.content.strip()
-    is_cmd=any(content.startswith(p) for p in PREFIXES)
-    is_mention=bot.user in message.mentions
-    if not should_respond_to(content,uid,is_cmd,is_mention): return
+    if message.author.bot or message.content.startswith("A2:"):
+        return
+
+    uid, content = message.author.id, message.content.strip()
+    is_cmd = any(content.startswith(p) for p in PREFIXES)
+    is_mention = bot.user in message.mentions
+    if not should_respond_to(content, uid, is_cmd, is_mention):
+        return
+
     await bot.process_commands(message)
-    if is_cmd: return
-    trust=user_emotions.get(uid,{}).get("trust",0)
+    if is_cmd:
+        return
+
+    trust = user_emotions.get(uid, {}).get("trust", 0)
     resp = await generate_a2_response(content, trust, uid)
-# Prevent sending the exact same response twice in a row
+    # Prevent sending the exact same response twice in a row
     if last_bot_responses.get(uid) == resp:
-    return
+        return
+
     last_bot_responses[uid] = resp
     await message.channel.send(f"A2: {resp}")
 
