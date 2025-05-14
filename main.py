@@ -17,8 +17,10 @@ local_sentiment = None
 try:
     from transformers import pipeline
     HAVE_TRANSFORMERS = True
+    # Initialize local pipelines
     local_summarizer = pipeline(
-        "summarization", model="facebook/bart-large-cnn"
+        "summarization",
+        model="facebook/bart-large-cnn"
     )
     local_toxic = pipeline(
         "text-classification",
@@ -30,7 +32,11 @@ try:
         model="distilbert-base-uncased-finetuned-sst-2-english"
     )
 except ImportError:
-    pass
+    # Transformers not installed; fall back to OpenAI
+    HAVE_TRANSFORMERS = False
+finally:
+    # Ensure variables exist
+    locals_set = True
 
 # ─── Dynamic Affection & Annoyance Settings ───────────────────────────────── ───────────────────────────────────────────────────────
 DATA_FILE = Path("/mnt/railway/volume/data.json")  # persistent mount
@@ -79,7 +85,7 @@ intents.reactions       = True
 intents.messages        = True
 intents.members         = True
 intents.guilds          = True
-bot = commands.Bot(command_prefix="!a2 ", intents=intents, application_id=DISCORD_APP_ID)
+bot = commands.Bot(command_prefix="!", intents=intents, application_id=DISCORD_APP_ID)
 
 # ─── State Containers ───────────────────────────────────────────────────────
 user_emotions          = {}
