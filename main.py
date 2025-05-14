@@ -346,22 +346,50 @@ async def affection_all(ctx):
     await ctx.send("
 ".join(lines))
 
-@bot.command(name="stats", help="Show your stats."),help="Show your stats."),help="Show your stats.")
+@bot.command(name="stats", help="Show your stats.")
 async def stats(ctx):
-    uid=ctx.author.id; e=user_emotions.get(uid)
-    if not e: return await ctx.send("A2: no data on you.")
-    await ctx.send(f"Trust:{e['trust']}/10 Attachment:{e['attachment']}/10 Protect:{e['protectiveness']}/10 Resent:{e['resentment']}/10 Aff:{e['affection_points']} Ann:{e['annoyance']}")
+    uid = ctx.author.id
+    e = user_emotions.get(uid)
+    if not e:
+        return await ctx.send("A2: no data on you.")
+    report = (
+        f"Trust: {e.get('trust',0)}/10
+"
+        f"Attachment: {e.get('attachment',0)}/10
+"
+        f"Protectiveness: {e.get('protectiveness',0)}/10
+"
+        f"Resentment: {e.get('resentment',0)}/10
+"
+        f"Affection: {e.get('affection_points',0)}
+"
+        f"Annoyance: {e.get('annoyance',0)}"
+    )
+    await ctx.send(f"A2: {report}")
 
-@bot.command(name="set_stat",help="Dev: set a stat.")
-async def set_stat(ctx,member:discord.Member,stat:str,value:float):
-    uid=member.id; e=user_emotions.setdefault(uid,{'trust':0,'resentment':0,'attachment':0,'protectiveness':0,'affection_points':0,'annoyance':0,'guilt_triggered':False,'last_interaction':datetime.now(timezone.utc).isoformat()})
-    if stat not in e: return await ctx.send(f"Bad stat: {stat}")
-    limits={'trust':(0,10),'resentment':(0,10),'attachment':(0,10),'protectiveness':(0,10),'annoyance':(0,100),'affection_points':(-100,1000)}
-    lo,hi=limits.get(stat,(0,10)); new=max(lo,min(hi,value)); e[stat]=new; save_data()
-    await ctx.send(f"Set {stat} to {new} for {member.mention}")
+@bot.command(name="set_stat", help="Dev: set a stat.")
+async def set_stat(ctx, member: discord.Member, stat: str, value: float):
+    uid = member.id
+    e = user_emotions.setdefault(uid, {
+        'trust':0, 'resentment':0, 'attachment':0,
+        'protectiveness':0, 'affection_points':0,'annoyance':0,
+        'guilt_triggered':False, 'last_interaction':datetime.now(timezone.utc).isoformat()
+    })
+    if stat not in e:
+        return await ctx.send(f"A2: Unknown stat '{stat}'.")
+    limits = {
+        'trust': (0,10), 'resentment': (0,10), 'attachment': (0,10),
+        'protectiveness': (0,10), 'annoyance': (0,100), 'affection_points': (-100,1000)
+    }
+    lo, hi = limits.get(stat, (0,10))
+    new = max(lo, min(hi, value))
+    e[stat] = new
+    save_data()
+    await ctx.send(f"A2: Set {stat} to {new} for {member.mention}.")
 
-@bot.command(name="ping",help="Ping")
-async def ping(ctx): await ctx.send("Pong!")
+@bot.command(name="ping", help="Ping the bot.")
+async def ping(ctx):
+    await ctx.send("Pong!")
 
 # ─── Test Commands Suite ────────────────────────────────────────────────────
 @bot.command(name="test_decay", help="Run affection and annoyance decay immediately.")
@@ -382,7 +410,8 @@ async def view_emotions(ctx, member: discord.Member = None):
     if uid not in user_emotions:
         return await ctx.send(f"A2: No data for {target.mention}.")
     e = user_emotions[uid]
-    await ctx.send(f"Emotion data for {target.mention}: {json.dumps(e)}")
+    await ctx.send(f"Emotion data for {target.mention}: {json.dumps(e, indent=2)}")
 
-if __name__=="__main__":
+if __name__ == "__main__":
+    bot.run(DISCORD_BOT_TOKEN)=="__main__":
     bot.run(DISCORD_BOT_TOKEN)
