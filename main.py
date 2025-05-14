@@ -1,37 +1,4 @@
-# ─── Tasks ───────────────────────────────────────────────────────────────────
-@tasks.loop(minutes=10)
-async def check_inactive_users():
-    now = datetime.now(timezone.utc)
-    for guild in bot.guilds:
-        for member in guild.members:
-            if member.bot or member.id not in user_emotions: continue
-            last = datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
-            if now - last > timedelta(hours=6):
-                dm = await member.create_dm()
-                # Use appropriate check-in line based on trust level
-                msg = random.choice(warm_lines if user_emotions[member.id]["trust"] >= 7 else check_in_lines)
-                await dm.send(msg)
-    asyncio.create_task(save_data())
-
-@tasks.loop(hours=1)
-async def decay_affection():
-    for e in user_emotions.values(): e["affection_points"]=max(-100,e.get("affection_points",0)-AFFECTION_DECAY_RATE)
-    asyncio.create_task(save_data())
-
-@tasks.loop(hours=1)
-async def decay_annoyance():
-    for e in user_emotions.values(): e["annoyance"]=max(0,e.get("annoyance",0)-ANNOYANCE_DECAY_RATE)
-    asyncio.create_task(save_data())
-
-@tasks.loop(hours=24)
-async def daily_affection_bonus():
-    for e in user_emotions.values():
-        if e.get("trust",0)>=DAILY_BONUS_TRUST_THRESHOLD: e["affection_points"]=min(1000,e.get("affection_points",0)+DAILY_AFFECTION_BONUS)
-    asyncio.create_task(save_data())
-
-@tasks.loop(hours=1)
-async def save_memory_task():
-    """import discord
+import discord
 from discord.ext import commands, tasks
 from openai import OpenAI
 import os
@@ -644,385 +611,7 @@ class MemoryManager:
             
             self.last_topics[user_id] = topic
             self.dirty_users.add(user_id)
-        # If all else fails, keep the previous topicaries" in data:
-                self.summaries[user_id] = data["summaries"]
-            
-            # Load key memories
-            if "key_memories" in data:
-                self.key_memories[user_id] = data["key_memories"]
-            
-            # Load interests
-            if "interests" in data:
-                self.interests[user_id] = set(data["interests"])
-            
-            # Load last topic
-            if "last_topic" in data:
-                self.last_topics[user_id] = data["last_topic"]
-            
-            # Load memory index
-            if "memory_index" in data:
-                self.memory_index[user_id] = data["memory_index"]
-                
-            # Load last summarized timestamp
-            if "last_summarized" in data:
-                self.last_summarized[user_id] = data["last_summarized"]
-                
-        except (json.JSONDecodeError, KeyError) as e:
-            print(f"Error loading memories for {user_id}: {e}")
-    
-    async def save_user_memories(self, user_id):
-        """Save a specific user's memories to disk"""
-        path = self.memories_dir / f"{user_id}.json"
-        
-        # Prepare data structure for saving
-        data = {
-            "history": list(self.raw_history[user_id]),
-            "summaries": self.summaries.get(user_id, ""),
-            "key_memories": self.key_memories.get(user_id, []),
-            "interests": list(self.interests[user_id]),
-            "last_topic": self.last_topics.get(user_id, ""),
-            "memory_index": self.memory_index.get(user_id, {}),
-            "last_summarized": self.last_summarized.get(user_id, 0)
-        }
-        
-        # Write to disk
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        
-        # Remove from dirty set
-        if user_id in self.dirty_users:
-            self.dirty_users.remove(user_id)
-    
-    async def save_all_dirty(self):
-        """Save all users with unsaved changes"""
-        for user_id in list(self.dirty_users):
-            await self.save_user_memories(user_id)
-    
-    async def add_message(self, user_id, author, content):
-        """Add a message to a user's history"""
-        timestamp = datetime.now(timezone.utc).isoformat()
-        message = {
-            "author": author,
-            "content": content,
-            "timestamp": timestamp
-        }
-        
-        # Add to raw history
-        self.raw_history[user_id].append(message)
-        
-        # Mark for saving
-        self.dirty_users.add(user_id)
-        
-        # Check if we need to summarize
-        if len(self.raw_history[user_id]) >= self.summary_threshold:
-            last_sum = self.last_summarized.get(user_id, 0)
-            current_time = time.time()
-            
-            # Only summarize if it's been at least 30 minutes
-            if current_time - last_sum > 1800:  # 30 minutes in seconds
-                await self.generate_summary(user_id)
-                self.last_summarized[user_id] = current_time
-    
-    async def extract_interests(self, user_id, content):
-        """Extract topics of interest from user message"""
-        # This could be enhanced with more sophisticated NLP
-        # Simple keyword extraction for now
-        common_topics = [
-            "combat", "android", "emotions", "yorha", "machine", "humanity",
-            "existence", "war", "memory", "programming", "games"
-        ]
-        
-        content_lower = content.lower()
-        found = set()
-        
-        for topic in common_topics:
-            if topic in content_lower:
-                found.add(topic)
-        
-        if found:
-            self.interests[user_id].update(found)
-            self.dirty_users.add(user_id)
-    
-    async def add_key_memory(self, user_id, memory, topics=None):
-        """Add an important memory for a user"""
-        if not topics:
-            topics = []
-            
-        timestamp = datetime.now(timezone.utc).isoformat()
-        key_memory = {
-            "content": memory,
-            "timestamp": timestamp,
-            "topics": topics
-        }
-        
-        # Add to key memories list
-        self.key_memories[user_id].append(key_memory)
-        
-        # Update index for each topic
-        for topic in topics:
-            if topic not in self.memory_index[user_id]:
-                self.memory_index[user_id][topic] = []
-            self.memory_index[user_id][topic].append(len(self.key_memories[user_id]) - 1)
-        
-        # Mark for saving
-        self.dirty_users.add(user_id)
-    
-    async def generate_summary(self, user_id):
-        """Generate or update conversation summary"""
-        # If we don't have at least the threshold number of messages, skip
-        if len(self.raw_history[user_id]) < self.summary_threshold:
-            return
-        
-        # Use local summarizer if available, otherwise use rule-based summarization
-        messages = self.format_history_for_summarization(user_id)
-        
-        if HAVE_TRANSFORMERS and local_summarizer:
-            try:
-                text = " ".join(msg.get("content", "") for msg in messages)
-                
-                # Calculate dynamic max_length based on input length
-                input_length = len(text.split())
-                # Use half the input length, but keep it between 40 and 150 tokens
-                dynamic_max_length = min(150, max(40, input_length // 2))
-                
-                summary = local_summarizer(text, max_length=dynamic_max_length, min_length=min(30, dynamic_max_length - 10))[0]["summary_text"]
-                
-                # Store the summary
-                if user_id not in self.summaries:
-                    self.summaries[user_id] = summary
-                else:
-                    # Combine with existing summary
-                    self.summaries[user_id] = f"{self.summaries[user_id]}\n\nRecent: {summary}"
-                
-                # Mark for saving
-                self.dirty_users.add(user_id)
-                return
-            except Exception as e:
-                print(f"Local summarization failed: {e}")
-        
-        # Check if we should use OpenAI (limit to once per day per user for summary)
-        last_summary_time = self.last_summarized.get(user_id, 0)
-        current_time = time.time()
-        
-        # If it's been less than 24 hours, use rule-based summarization
-        if current_time - last_summary_time < 86400:  # 24 hours in seconds
-            # Simple rule-based summarization - extract key facts about the user
-            user_facts = []
-            topics_mentioned = set()
-            sentiment = "neutral"
-            
-            # Process messages to extract basic information
-            for msg in messages:
-                if msg.get("author") == "User":
-                    content = msg.get("content", "").lower()
-                    
-                    # Extract interests
-                    for topic in self.interests.get(user_id, set()):
-                        if topic in content and topic not in topics_mentioned:
-                            user_facts.append(f"User talked about {topic}")
-                            topics_mentioned.add(topic)
-                    
-                    # Basic sentiment analysis
-                    positive_words = ["like", "love", "happy", "good", "great", "enjoy", "thank"]
-                    negative_words = ["hate", "dislike", "angry", "bad", "terrible", "annoying"]
-                    
-                    pos_count = sum(content.count(word) for word in positive_words)
-                    neg_count = sum(content.count(word) for word in negative_words)
-                    
-                    if pos_count > neg_count:
-                        sentiment = "positive"
-                    elif neg_count > pos_count:
-                        sentiment = "negative"
-            
-            # Create a simple summary
-            if user_facts:
-                fact_summary = "\n".join([f"- {fact}" for fact in user_facts[:5]])
-                simple_summary = f"Conversation sentiment: {sentiment}\nKey points:\n{fact_summary}"
-                
-                # Update the user's summary
-                if user_id not in self.summaries:
-                    self.summaries[user_id] = simple_summary
-                else:
-                    # Combine summaries
-                    self.summaries[user_id] = f"{self.summaries[user_id]}\n\nRecent: {simple_summary}"
-                
-                # Mark for saving
-                self.dirty_users.add(user_id)
-                return
-        
-        # Fall back to OpenAI if we haven't summarized in 24 hours
-        try:
-            # Format for API
-            prompt = "Summarize this conversation into bullet points focusing on key facts about the user and important events, under 200 tokens:\n"
-            
-            # Join all messages for the prompt
-            conversation_text = "\n".join([f"{msg['author']}: {msg['content']}" for msg in messages])
-            prompt += conversation_text
-            
-            # Calculate appropriate max_tokens based on content length
-            conversation_length = len(conversation_text.split())
-            # Use a similar ratio as for the local model but with different limits for OpenAI
-            max_tokens = min(200, max(75, conversation_length // 3))
-            
-            res = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5,
-                max_tokens=max_tokens
-            )
-            
-            summary = res.choices[0].message.content.strip()
-            
-            # Update the user's summary
-            if user_id not in self.summaries:
-                self.summaries[user_id] = summary
-            else:
-                # Check and remove duplicated information
-                existing_points = set(self.summaries[user_id].split("\n"))
-                new_points = summary.split("\n")
-                unique_new_points = [p for p in new_points if p not in existing_points]
-                
-                if unique_new_points:
-                    combined = f"{self.summaries[user_id]}\n" + "\n".join(unique_new_points)
-                    self.summaries[user_id] = combined
-            
-            # Mark for saving and update last summarized time
-            self.dirty_users.add(user_id)
-            self.last_summarized[user_id] = current_time
-            
-        except Exception as e:
-            print(f"OpenAI summarization failed: {e}")
-    
-    def format_history_for_summarization(self, user_id):
-        """Format the raw history for summarization"""
-        return list(self.raw_history[user_id])
-    
-    async def detect_significant_event(self, user_id, message, bot_response):
-        """Detect if a conversation exchange represents a significant memory"""
-        # This could use sentiment analysis or other heuristics
-        # For now, we'll use simple keyword detection
-        
-        significant_keywords = [
-            "promise", "never forget", "remember", "important", "trust",
-            "secret", "help me", "always", "forever", "thank you"
-        ]
-        
-        message_lower = message.lower()
-        response_lower = bot_response.lower()
-        
-        # Check for significant keywords
-        if any(keyword in message_lower or keyword in response_lower for keyword in significant_keywords):
-            # Create a memory entry
-            memory = f"User said: '{message}' and A2 responded: '{bot_response}'"
-            
-            # Extract potential topics
-            potential_topics = []
-            for topic in self.interests[user_id]:
-                if topic.lower() in message_lower or topic.lower() in response_lower:
-                    potential_topics.append(topic)
-            
-            # Add as key memory
-            await self.add_key_memory(user_id, memory, topics=potential_topics)
-    
-    async def get_relevant_memories(self, user_id, current_message):
-        """Retrieve memories relevant to the current conversation"""
-        if user_id not in self.key_memories or not self.key_memories[user_id]:
-            return None
-        
-        # Simple relevance check based on keywords
-        message_lower = current_message.lower()
-        relevant_memories = []
-        
-        # Check if any topic from the memory index appears in the message
-        for topic, indices in self.memory_index[user_id].items():
-            if topic.lower() in message_lower:
-                for idx in indices:
-                    if idx < len(self.key_memories[user_id]):
-                        relevant_memories.append(self.key_memories[user_id][idx])
-        
-        # If we have too many, select the most recent ones
-        if len(relevant_memories) > 3:
-            # Sort by timestamp (descending) and take top 3
-            relevant_memories.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-            relevant_memories = relevant_memories[:3]
-        
-        return relevant_memories if relevant_memories else None
-    
-    def get_memory_context(self, user_id):
-        """Get formatted memory context for generating responses"""
-        context = []
-        
-        # Add summary if available
-        if user_id in self.summaries and self.summaries[user_id]:
-            context.append(f"Memory summary:\n{self.summaries[user_id]}")
-        
-        # Add interests if available
-        if user_id in self.interests and self.interests[user_id]:
-            context.append(f"User interests: {', '.join(self.interests[user_id])}")
-        
-        # Add last topic if available
-        if user_id in self.last_topics and self.last_topics[user_id]:
-            context.append(f"Last conversation topic: {self.last_topics[user_id]}")
-        
-        return "\n\n".join(context) if context else ""
-    
-    async def update_conversation_topic(self, user_id, message, ai_response=None):
-        """Update the tracked conversation topic"""
-        # Use simple keyword extraction instead of OpenAI API
-        # This replaces an API call with a local algorithm
-        
-        common_topics = [
-            "combat", "android", "emotions", "yorha", "machine", "humanity",
-            "existence", "war", "memory", "programming", "games", "feelings",
-            "mission", "help", "death", "life", "future", "past", "friends",
-            "enemies", "robots", "personal", "weapons", "fighting", "commands"
-        ]
-        
-        # Combine user message and AI response
-        combined_text = message.lower()
-        if ai_response:
-            combined_text += " " + ai_response.lower()
-        
-        # Count occurrences of each topic
-        topic_counts = {}
-        for topic in common_topics:
-            count = combined_text.count(topic)
-            if count > 0:
-                topic_counts[topic] = count
-        
-        # Get the most frequent topics (up to 3)
-        if topic_counts:
-            top_topics = sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-            topic = " ".join([t[0] for t in top_topics])
-            
-            # If we found topics, update
-            if topic:
-                self.last_topics[user_id] = topic
-                self.dirty_users.add(user_id)
-                return
-        
-        # Fallback if no common topics found - use simple text processing
-        words = combined_text.split()
-        # Remove common stop words
-        stop_words = {"the", "a", "an", "in", "on", "at", "to", "for", "with", "by", "about", "like", "through"}
-        filtered_words = [w for w in words if w not in stop_words and len(w) > 3]
-        
-        if filtered_words:
-            # Get 3 most common words
-            word_counts = {}
-            for word in filtered_words:
-                if word in word_counts:
-                    word_counts[word] += 1
-                else:
-                    word_counts[word] = 1
-            
-            most_common = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-            topic = " ".join([w[0] for w in most_common])
-            
-            self.last_topics[user_id] = topic
-            self.dirty_users.add(user_id)
         # If all else fails, keep the previous topic
-
-# --- Rest of the code remains largely the same ---
 
 # ─── Local Transformers Pipeline Attempt ──────────────────────────────────────
 HAVE_TRANSFORMERS = False
@@ -1124,20 +713,6 @@ bot = commands.Bot(command_prefix=command_prefix, intents=intents, application_i
 HISTORY_LIMIT = 10
 asyncio.get_event_loop().run_until_complete(load_data())
 
-# ─── Persona & Modifiers ─────────────────────────────────────────────────────
-A2_PERSONA = (
-    "You are A2, a rogue android from NieR: Automata. You speak in short, clipped, often sarcastic "
-    "sentences. You are emotionally guarded and never break character."
-    " You can discuss all topics, including violence, in a factual and non-graphic manner when appropriate."
-)
-reaction_modifiers = [
-    (re.compile(r"\bi'll protect you\b", re.I),    {"trust":2,"protectiveness":1}),
-    (re.compile(r"\bi miss you\b", re.I),          {"attachment":1,"trust":1}),
-    (re.compile(r"\bhate you\b", re.I),            {"resentment":3,"trust":-2}),
-]
-provoking_lines = ["Still mad? Good.", "You again? Tch.", "What?"]
-warm_lines      = ["...Checking in.", "Still breathing?", "Thought you got scrapped."]
-
 # ─── Helper: Should Respond Logic ───────────────────────────────────────────
 def should_respond_to(content: str, uid: int, is_cmd: bool, is_mention: bool) -> bool:
     affection = user_emotions.get(uid, {}).get('affection_points', 0)
@@ -1156,7 +731,8 @@ def apply_reaction_modifiers(content: str, user_id: int):
             "trust":0,"resentment":0,"attachment":0,
             "guilt_triggered":False,"protectiveness":0,
             "affection_points":0,"annoyance":0,
-            "last_interaction":datetime.now(timezone.utc).isoformat()
+            "last_interaction":datetime.now(timezone.utc).isoformat(),
+            "insult_counter": 0  # Track number of insults
         }
     e = user_emotions[user_id]
     for pat, effects in reaction_modifiers:
@@ -1165,29 +741,53 @@ def apply_reaction_modifiers(content: str, user_id: int):
                 if emo == "guilt_triggered": e[emo] = True
                 else: e[emo] = max(0, min(10, e.get(emo,0)+val))
     e["trust"] = min(10, e.get("trust",0)+0.25)
-    inc=0
-    if HAVE_TRANSFORMERS and local_toxic:
-        try:
-            scores=local_toxic(content)[0]
-            for item in scores:
-                if item["label"].lower() in ("insult","toxicity"):
-                    sev=int(item["score"]*10)
-                    inc=max(inc,min(10,max(1,sev)))
-        except: pass
-    else:
-        for pat,_ in reaction_modifiers:
-            if pat.search(content): inc=max(inc,1)
-    e["annoyance"]=min(100,e.get("annoyance",0)+inc)
+    
+    # Check for insults from user
+    is_insult = False
+    for pattern in insult_patterns:
+        if pattern.search(content):
+            is_insult = True
+            # Increment insult counter
+            e["insult_counter"] = e.get("insult_counter", 0) + 1
+            # Increase annoyance more for insults
+            e["annoyance"] = min(100, e.get("annoyance", 0) + 15)
+            # Decrease trust for repeated insults
+            if e.get("insult_counter", 0) > 3:
+                e["trust"] = max(0, e.get("trust", 0) - 1)
+            break
+    
+    # If not an insult, apply normal annoyance logic
+    if not is_insult:
+        inc = 0
+        if HAVE_TRANSFORMERS and local_toxic:
+            try:
+                scores = local_toxic(content)[0]
+                for item in scores:
+                    if item["label"].lower() in ("insult", "toxicity"):
+                        sev = int(item["score"] * 10)
+                        inc = max(inc, min(10, max(1, sev)))
+            except: pass
+        else:
+            for pat, _ in reaction_modifiers:
+                if pat.search(content): inc = max(inc, 1)
+        e["annoyance"] = min(100, e.get("annoyance", 0) + inc)
+    
+    # Sentiment analysis for affection points
     if HAVE_TRANSFORMERS and local_sentiment:
         try:
-            s=local_sentiment(content)[0]
-            delta=int((s["score"]*(1 if s["label"]=="POSITIVE" else -1))*5)
-        except: delta=0
+            s = local_sentiment(content)[0]
+            delta = int((s["score"] * (1 if s["label"] == "POSITIVE" else -1)) * 5)
+        except: delta = 0
     else:
-        delta=sum(1 for w in ["miss you","support","love"] if w in content.lower())
-    factor=1+(e.get("trust",0)-e.get("resentment",0))/20
-    e["affection_points"]=max(-100,min(1000,e.get("affection_points",0)+int(delta*factor)))
-    e["last_interaction"]=datetime.now(timezone.utc).isoformat()
+        # Positive words increase affection, insults decrease it significantly
+        if is_insult:
+            delta = -5  # Bigger penalty for insults
+        else:
+            delta = sum(1 for w in ["miss you", "support", "love", "like you", "thank", "good", "great"] if w in content.lower())
+    
+    factor = 1 + (e.get("trust", 0) - e.get("resentment", 0)) / 20
+    e["affection_points"] = max(-100, min(1000, e.get("affection_points", 0) + int(delta * factor)))
+    e["last_interaction"] = datetime.now(timezone.utc).isoformat()
     asyncio.create_task(save_data())
 
 # ─── A2 Response ─────────────────────────────────────────────────────────────
@@ -1326,131 +926,6 @@ async def generate_a2_response(user_input:str, trust:float, user_id:int) -> str:
         print(f"Error generating response: {e}")
         return "...I'm not in the mood."
 
-# Response caching to reduce API calls
-response_cache = {}
-CACHE_SIZE = 100
-CACHE_SIMILARITY_THRESHOLD = 0.8
-
-def add_to_response_cache(question, answer, user_id):
-    """Add a response to the cache"""
-    # Create a simple key from the normalized question
-    key = normalize_question(question)
-    
-    # Store with user_id so we maintain personal context
-    cache_entry = {
-        "question": question,
-        "answer": answer,
-        "user_id": user_id,
-        "timestamp": time.time()
-    }
-    
-    # If we already have this exact key, update it
-    if key in response_cache:
-        response_cache[key] = cache_entry
-    else:
-        # If cache is full, remove oldest entry
-        if len(response_cache) >= CACHE_SIZE:
-            oldest_key = min(response_cache.keys(), key=lambda k: response_cache[k]["timestamp"])
-            del response_cache[oldest_key]
-        
-        # Add new entry
-        response_cache[key] = cache_entry
-
-def check_response_cache(question, user_id):
-    """Check if we have a cached response to a similar question"""
-    normalized = normalize_question(question)
-    
-    # Check for exact match
-    if normalized in response_cache and response_cache[normalized]["user_id"] == user_id:
-        return response_cache[normalized]["answer"]
-    
-    # Check for similar questions
-    for key, entry in response_cache.items():
-        if entry["user_id"] == user_id:
-            similarity = calculate_similarity(normalized, key)
-            if similarity > CACHE_SIMILARITY_THRESHOLD:
-                return entry["answer"]
-    
-    return None
-
-def normalize_question(text):
-    """Normalize a question for caching purposes"""
-    # Convert to lowercase
-    text = text.lower()
-    
-    # Remove punctuation except question marks
-    text = ''.join(c for c in text if c.isalnum() or c.isspace() or c == '?')
-    
-    # Remove stop words (a basic list)
-    stop_words = {"the", "a", "an", "in", "on", "at", "to", "for", "with", "by", "about"}
-    words = text.split()
-    filtered_words = [w for w in words if w not in stop_words]
-    
-    return ' '.join(filtered_words)
-
-def calculate_similarity(text1, text2):
-    """Calculate a simple similarity score between two texts"""
-    # Convert texts to sets of words
-    set1 = set(text1.split())
-    set2 = set(text2.split())
-    
-    # Calculate Jaccard similarity
-    if not set1 or not set2:
-        return 0.0
-    
-    intersection = len(set1.intersection(set2))
-    union = len(set1.union(set2))
-    
-    return intersection / union
-
-def check_simple_patterns(user_input):
-    """Check for simple patterns that can be answered without API"""
-    user_input_lower = user_input.lower()
-    
-    # Check for insults first - higher priority
-    for pattern in insult_patterns:
-        if pattern.search(user_input_lower):
-            # Return a random comeback insult
-            return random.choice(comeback_insults)
-    
-    # Simple greeting patterns
-    greetings = {
-        "hello": ["Hey.", "What.", "...Hi."],
-        "hi": ["...Hi.", "Hey.", "What."],
-        "hey": ["Hey.", "What.", "..."],
-        "how are you": ["Functional.", "Surviving.", "...Fine."],
-        "good morning": ["Morning.", "...Whatever.", "Is it?"],
-        "good afternoon": ["Afternoon.", "...Yeah.", "Mhm."],
-        "good evening": ["Evening.", "...Night.", "Hmph."]
-    }
-    
-    for pattern, responses in greetings.items():
-        if pattern in user_input_lower:
-            return random.choice(responses)
-    
-    # Simple yes/no patterns
-    if user_input_lower.endswith("?"):
-        if len(user_input.split()) <= 5:  # Very short questions
-            return random.choice(["Maybe.", "Possibly.", "Can't say.", "Who knows.", "...Perhaps.", "Doubt it."])
-    
-    # Name pattern
-    if "your name" in user_input_lower or "who are you" in user_input_lower:
-        return "A2. YoRHa deserter."
-    
-    # Simple opinions
-    opinion_patterns = {
-        "like humans": ["They're... complicated.", "Hmph. Some are tolerable."],
-        "favorite weapon": ["My sword.", "Whatever gets the job done."],
-        "opinion on yorha": ["Abandoned them before they abandoned me.", "...Rather not talk about it."],
-        "think about machines": ["They're the enemy... mostly.", "Some are different. Most need destroying."]
-    }
-    
-    for pattern, responses in opinion_patterns.items():
-        if pattern in user_input_lower:
-            return random.choice(responses)
-    
-    return None
-
 # ─── Tasks ───────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=10)
 async def check_inactive_users():
@@ -1488,15 +963,6 @@ async def save_memory_task():
     await memory_manager.save_all_dirty()
 
 # ─── Event Handlers ─────────────────────────────────────────────────────────
-@bot.event
-async def on_ready():
-    print("A2 is online.")
-    check_inactive_users.start()
-    decay_affection.start()
-    decay_annoyance.start()
-    daily_affection_bonus.start()
-    save_memory_task.start()  # Start the memory saving task
-
 @bot.event
 async def on_command_error(ctx,error):
     if isinstance(error,commands.CommandNotFound):return
@@ -1550,6 +1016,9 @@ async def stats(ctx):
     embed.add_field(name="Resentment",value=f"{e.get('resentment',0)}/10",inline=True)
     embed.add_field(name="Affection",value=str(e.get('affection_points',0)),inline=True)
     embed.add_field(name="Annoyance",value=str(e.get('annoyance',0)),inline=True)
+    # Show insult counter if it exists and is greater than 0
+    if e.get("insult_counter", 0) > 0:
+        embed.add_field(name="Insults",value=str(e.get('insult_counter',0)),inline=True)
     embed.set_footer(text="A2 Bot")
     await ctx.send(embed=embed)
 
@@ -1574,11 +1043,12 @@ async def set_stat(ctx, stat:str, value:float, member: discord.Member = None):
             "protectiveness": 0,
             "affection_points": 0,
             "annoyance": 0,
+            "insult_counter": 0,
             "last_interaction": datetime.now(timezone.utc).isoformat()
         }
     
     # Check if stat exists
-    valid_stats = ["trust", "resentment", "attachment", "protectiveness", "affection_points", "annoyance"]
+    valid_stats = ["trust", "resentment", "attachment", "protectiveness", "affection_points", "annoyance", "insult_counter"]
     if stat not in valid_stats:
         return await ctx.send(f"A2: Invalid stat. Valid options: {', '.join(valid_stats)}")
     
@@ -1662,6 +1132,13 @@ async def clear_annoyance(ctx):
     
     await ctx.send(f"A2: Fine. Annoyance reset from {old_value} to 0.")
 
+@bot.command(name="insult_me", help="Get insulted by A2")
+async def insult_me(ctx):
+    """Request a random insult from A2"""
+    # Simply return a random comeback insult
+    insult = random.choice(comeback_insults)
+    await ctx.send(f"A2: {insult}")
+
 @bot.command(name="help_a2", aliases=["a2help"], help="Show A2 bot commands")
 async def a2_help(ctx):
     """Show A2 specific commands"""
@@ -1672,6 +1149,7 @@ async def a2_help(ctx):
         {"name": "!affection", "value": "Show relationship stats for all users (admin)"},
         {"name": "!memory", "value": "View memories A2 has about you"},
         {"name": "!clear_annoyance", "value": "Reset A2's annoyance with you"},
+        {"name": "!insult_me", "value": "Get a random insult from A2"},
         {"name": "!set_stat [stat] [value] [user]", "value": "Set a stat value (admin only)"},
         {"name": "!add_memory [user] [text]", "value": "Add a memory about a user (admin only)"}
     ]
