@@ -697,21 +697,533 @@ OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_ORG_ID     = os.environ.get("OPENAI_ORG_ID", "")
 OPENAI_PROJECT_ID = os.environ.get("OPENAI_PROJECT_ID", "")
 
+# Validate required environment variables
+if not DISCORD_BOT_TOKEN:
+    raise ValueError("DISCORD_BOT_TOKEN environment variable is not set!")
+
+if not OPENAI_API_KEY:
+    print("WARNING: OPENAI_API_KEY environment variable is not set. Bot will use pattern matching only.")
+
 client = OpenAI(api_key=OPENAI_API_KEY, organization=OPENAI_ORG_ID, project=OPENAI_PROJECT_ID)
 
+# Set up Discord bot with properly configured intents
 intents = discord.Intents.default()
-intents.message_content = True
-intents.reactions       = True
-intents.messages        = True
-intents.members         = True
-intents.guilds          = True
+intents.message_content = True  # Required to read message content
+intents.messages = True         # Required to receive messages 
+intents.reactions = True        # For reaction handling
+intents.members = True          # For member operations
+intents.guilds = True           # For guild-related operations
+
 PREFIXES = ["!", "!a2 "]
 command_prefix = commands.when_mentioned_or(*PREFIXES)
-bot = commands.Bot(command_prefix=command_prefix, intents=intents, application_id=DISCORD_APP_ID)
+
+# Initialize bot with explicit intents
+bot = commands.Bot(
+    command_prefix=command_prefix, 
+    intents=intents, 
+    application_id=DISCORD_APP_ID,
+    case_insensitive=True  # Makes commands case-insensitive
+)
 
 # ─── Per-user State & Utilities ─────────────────────────────────────────────
 HISTORY_LIMIT = 10
-asyncio.get_event_loop().run_until_complete(load_data())
+
+# ─── Helper: Should Respond Logic ───────────────────────────────────────────
+def should_respond_to(content: str, uid: int, is_cmd: bool, is_mention: bool) -> bool:
+    affection = user_emotions.get(uid, {}).get('affection_points', 0)
+    if is_cmd or is_mention:
+        return True
+    if affection >= 800:
+        return True
+    if affection >= 500:
+        return random.random() < 0.2
+    return False
+
+# ─── Emotion & Annoyance Tracking ───────────────────────────────────────────
+def apply_reaction_modifiers(content: str, user_id: int):
+    if user_id not in user_emotions:
+        user_emotions[user_id] = {
+            "trust":0,"resentment":0,"attachment":0,
+            "guilt_triggered":False,"protectiveness":0,
+            "affection_points":0,"annoyance":0,
+            "last_interaction":datetime.now(timezone.utc).isoformat(),
+            "insult_counter": 0  # Track number of insults
+        }
+    e = user_emotions[user_id]
+    for pat, effects in reaction_modifiers:
+        if pat.search(content):
+            for emo, val in effects.items():
+                if emo == "guilt_triggered": e[emo] = True
+                else: e[emo] = max(0, min(10, e.get(emo,0)+val))
+    e["trust"] = min(10, e.get("trust",0)+0.25)
+    
+    # Check for insults from user
+    is_insult = False
+    for pattern in insult_patterns:
+        if pattern.search(content):
+            is_insult = True
+            # Increment insult counter
+            e["insult_counter"] = e.get("insult_counter", 0) + 1
+            # Increase annoyance more for insults
+            e["annoyance"] = min(100, e.get("annoyance", 0) + 15)
+            # Decrease trust for repeated insults
+            if e.get("insult_counter", 0) > 3:
+                e["trust"] = max(0, e.get("trust", 0) - 1)
+            break
+    
+    # If not an insult, apply normal annoyance logic
+    if not is_insult:
+        inc = 0
+        if HAVE_TRANSFORMERS and local_toxic:
+            try:
+                scores = local_toxic(content)[0]
+                for item in scores:
+                    if item["label"].lower() in ("insult", "toxicity"):
+                        sev = int(item["score"] * 10)
+                        inc = max(inc, min(10, max(1, sev)))
+            except: pass
+        else:
+            for pat, _ in reaction_modifiers:
+                if pat.search(content): inc = max(inc, 1)
+        e["annoyance"] = min(100, e.get("annoyance", 0) + inc)
+    
+    # Sentiment analysis for affection points
+    if HAVE_TRANSFORMERS and local_sentiment:
+        try:
+            s = local_sentiment(content)[0]
+            delta = int((s["score"] * (1 if s["label"] == "POSITIVE" else -1)) * 5)
+        except: delta = 0
+    else:
+        # Positive words increase affection, insults decrease it significantly
+        if is_insult:
+            delta = -5  # Bigger penalty for insults
+        else:
+            delta = sum(1 for w in ["miss you", "support", "love", "like you", "thank", "good", "great"] if w in content.lower())
+    
+    factor = 1 + (e.get("trust", 0) - e.get("resentment", 0)) / 20
+    e["affection_points"] = max(-100, min(1000, e.get("affection_points", 0) + int(delta * factor)))
+    e["last_interaction"] = datetime.now(timezone.utc).isoformat()
+    asyncio.create_task(save_data())
+
+# ─── A2 Response ─────────────────────────────────────────────────────────────
+async def generate_a2_response(user_input:str, trust:float, user_id:int) -> str:
+    # Check for cached responses to similar questions first
+    cached_response = check_response_cache(user_input, user_id)
+    if cached_response:
+        # If we found a cached response, use it directly
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", cached_response)
+        
+        # Update conversation tracking
+        await memory_manager.extract_interests(user_id, user_input)
+        await memory_manager.update_conversation_topic(user_id, user_input, cached_response)
+        
+        return cached_response
+    
+    # Get memory context
+    memory_context = memory_manager.get_memory_context(user_id)
+    
+    # Get relevant memories for this conversation
+    relevant_memories = await memory_manager.get_relevant_memories(user_id, user_input)
+    specific_memories = ""
+    if relevant_memories:
+        memories_text = "\n".join([f"- {m['content']}" for m in relevant_memories])
+        specific_memories = f"Relevant memories:\n{memories_text}\n"
+    
+    # Extract possible topics of interest
+    await memory_manager.extract_interests(user_id, user_input)
+    
+    # Check annoyance level - if too high, use canned responses
+    annoyance = user_emotions.get(user_id, {}).get("annoyance", 0)
+    if annoyance > ANNOYANCE_THRESHOLD:
+        annoyed_responses = [
+            "Not now.",
+            "...",
+            "I'm busy.",
+            "Go away.",
+            "Can't talk.",
+            "Leave me alone.",
+            "Not interested.",
+            "Whatever."
+        ]
+        response = random.choice(annoyed_responses)
+        
+        # Store the message exchange
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", response)
+        
+        return response
+    
+    # Check for simple queries that can be answered without API
+    simple_response = check_simple_patterns(user_input)
+    if simple_response:
+        # Store the message exchange
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", simple_response)
+        
+        # Update topics
+        await memory_manager.update_conversation_topic(user_id, user_input, simple_response)
+        
+        return simple_response
+    
+    # Use different models based on trust and query complexity
+    # Use cheaper model for simple queries
+    content_length = len(user_input.split())
+    is_complex = content_length > 20 or "?" in user_input or any(word in user_input.lower() for word in ["explain", "why", "how", "what", "when", "where"])
+    
+    # Use GPT-4 selectively for complex queries from trusted users
+    if trust >= 5 and is_complex:
+        model = "gpt-4"
+    else:
+        model = "gpt-3.5-turbo"
+    
+    # Shorter prompt for low-trust users
+    if trust < 3:
+        prompt = f"{A2_PERSONA}\nKeep responses very brief.\n\nUser: {user_input}\nA2:"
+    else:
+        # Construct the prompt with memory integration
+        prompt = A2_PERSONA + f"\nTrust: {trust}/10\n"
+        
+        # Add memory context if available
+        if memory_context:
+            prompt += f"{memory_context}\n"
+        
+        # Add specific memories if available
+        if specific_memories:
+            prompt += f"{specific_memories}\n"
+        
+        # Add recent conversation history
+        recent_history = []
+        if user_id in memory_manager.raw_history:
+            # Only include last few messages for context to reduce token usage
+            history_limit = 3 if trust < 5 else HISTORY_LIMIT
+            recent = list(memory_manager.raw_history[user_id])[-history_limit:]
+            for msg in recent:
+                if msg["author"] == "User":
+                    recent_history.append(f"User: {msg['content']}")
+                else:
+                    recent_history.append(f"A2: {msg['content']}")
+        
+        if recent_history:
+            prompt += "Recent conversation:\n" + "\n".join(recent_history) + "\n"
+        
+        # Add the current user input
+        prompt += f"User: {user_input}\nA2:"
+    
+    try:
+        # Use shorter max_tokens for low trust or simple responses
+        max_tokens = 50 if trust < 3 or not is_complex else 100
+        
+        res = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            max_tokens=max_tokens
+        )
+        
+        response = res.choices[0].message.content.strip()
+        
+        # Store in cache
+        add_to_response_cache(user_input, response, user_id)
+        
+        # Store the message exchange
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", response)
+        
+        # Update the conversation topic
+        await memory_manager.update_conversation_topic(user_id, user_input, response)
+        
+        # Check if this is a significant memory
+        await memory_manager.detect_significant_event(user_id, user_input, response)
+        
+        return response
+    except Exception as e:
+        print(f"Error generating response: {e}")
+        return "...I'm not in the mood."
+
+# ─── Tasks ───────────────────────────────────────────────────────────────────
+@tasks.loop(minutes=10)
+async def check_inactive_users():
+    now = datetime.now(timezone.utc)
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.bot or member.id not in user_emotions: continue
+            last = datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
+            if now - last > timedelta(hours=6):
+                dm = await member.create_dm()
+                # Use appropriate check-in line based on trust level
+                msg = random.choice(warm_lines if user_emotions[member.id]["trust"] >= 7 else check_in_lines)
+                await dm.send(msg)
+    asyncio.create_task(save_data())
+
+@tasks.loop(hours=1)
+async def decay_affection():
+    for e in user_emotions.values(): e["affection_points"]=max(-100,e.get("affection_points",0)-AFFECTION_DECAY_RATE)
+    asyncio.create_task(save_data())
+
+@tasks.loop(hours=1)
+async def decay_annoyance():
+    for e in user_emotions.values(): e["annoyance"]=max(0,e.get("annoyance",0)-ANNOYANCE_DECAY_RATE)
+    asyncio.create_task(save_data())
+
+@tasks.loop(hours=24)
+async def daily_affection_bonus():
+    for e in user_emotions.values():
+        if e.get("trust",0)>=DAILY_BONUS_TRUST_THRESHOLD: e["affection_points"]=min(1000,e.get("affection_points",0)+DAILY_AFFECTION_BONUS)
+    asyncio.create_task(save_data())
+
+@tasks.loop(hours=1)
+async def save_memory_task():
+    """Periodically save memory data"""
+    await memory_manager.save_all_dirty()
+
+# ─── Event Handlers ─────────────────────────────────────────────────────────
+@bot.event
+async def on_ready():
+    print(f"A2 is online as {bot.user.name}#{bot.user.discriminator}")
+    print(f"Bot ID: {bot.user.id}")
+    print(f"Connected to {len(bot.guilds)} servers:")
+    for guild in bot.guilds:
+        print(f"- {guild.name} (ID: {guild.id})")
+    
+    # Load data in the on_ready event
+    try:
+        print("Loading user data and memories...")
+        await load_data()
+        print("Data loaded successfully!")
+    except Exception as e:
+        print(f"ERROR LOADING DATA: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Start all periodic tasks
+    try:
+        print("Starting periodic tasks...")
+        check_inactive_users.start()
+        decay_affection.start()
+        decay_annoyance.start()
+        daily_affection_bonus.start()
+        save_memory_task.start()
+        print("All tasks started!")
+    except Exception as e:
+        print(f"ERROR STARTING TASKS: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("A2 is fully initialized and ready to respond.")
+
+@bot.event
+async def on_command_error(ctx,error):
+    if isinstance(error,commands.CommandNotFound):return
+    raise error
+
+@bot.event
+async def on_message(message):
+    if message.author.bot or message.content.startswith("A2:"):
+        return
+
+    uid, content = message.author.id, message.content.strip()
+    is_cmd = any(content.startswith(p) for p in PREFIXES)
+    is_mention = bot.user in message.mentions
+    if not should_respond_to(content, uid, is_cmd, is_mention):
+        return
+
+    await bot.process_commands(message)
+    if is_cmd:
+        return
+
+    trust = user_emotions.get(uid, {}).get("trust", 0)
+    apply_reaction_modifiers(content, uid)  # Update emotions
+    
+    resp = await generate_a2_response(content, trust, uid)
+    # Prevent sending the exact same response twice in a row
+    if last_bot_responses.get(uid) == resp:
+        return
+
+    last_bot_responses[uid] = resp
+    await message.channel.send(f"A2: {resp}")
+
+# ─── Commands ───────────────────────────────────────────────────────────────
+@bot.command(name="affection",help="Show emotion stats for all users.")
+async def affection_all(ctx):
+    if not user_emotions: return await ctx.send("A2: no interactions.")
+    lines=[]
+    for uid,e in user_emotions.items():
+        member=bot.get_user(uid)or(ctx.guild and ctx.guild.get_member(uid))
+        mention=member.mention if member else f"<@{uid}>"
+        lines.append(f"**{mention}** • Trust: {e.get('trust',0)}/10 • Attachment: {e.get('attachment',0)}/10 • Protectiveness: {e.get('protectiveness',0)}/10 • Resentment: {e.get('resentment',0)}/10 • Affection: {e.get('affection_points',0)} • Annoyance: {e.get('annoyance',0)}")
+    await ctx.send("\n".join(lines))
+
+@bot.command(name="stats",help="Show your stats.")
+async def stats(ctx):
+    uid=ctx.author.id; e=user_emotions.get(uid)
+    if not e: return await ctx.send("A2: no data on you.")
+    embed=discord.Embed(title="Your Emotion Stats",color=discord.Color.blue(),timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="Trust",value=f"{e.get('trust',0)}/10",inline=True)
+    embed.add_field(name="Attachment",value=f"{e.get('attachment',0)}/10",inline=True)
+    embed.add_field(name="Protectiveness",value=f"{e.get('protectiveness',0)}/10",inline=True)
+    embed.add_field(name="Resentment",value=f"{e.get('resentment',0)}/10",inline=True)
+    embed.add_field(name="Affection",value=str(e.get('affection_points',0)),inline=True)
+    embed.add_field(name="Annoyance",value=str(e.get('annoyance',0)),inline=True)
+    # Show insult counter if it exists and is greater than 0
+    if e.get("insult_counter", 0) > 0:
+        embed.add_field(name="Insults",value=str(e.get('insult_counter',0)),inline=True)
+    embed.set_footer(text="A2 Bot")
+    await ctx.send(embed=embed)
+
+@bot.command(name="set_stat",aliases=["setstat"],help="Dev: set a stat for a user or yourself.")
+async def set_stat(ctx, stat:str, value:float, member: discord.Member = None):
+    """Set an emotion stat value (admin only)"""
+    # Check if user is admin
+    if not ctx.author.guild_permissions.administrator:
+        return await ctx.send("A2: Nice try. Only admins can use this.")
+    
+    # Default to the command author if no member specified
+    if not member:
+        member = ctx.author
+    
+    # Ensure the user exists in the system
+    if member.id not in user_emotions:
+        user_emotions[member.id] = {
+            "trust": 0,
+            "resentment": 0,
+            "attachment": 0,
+            "guilt_triggered": False,
+            "protectiveness": 0,
+            "affection_points": 0,
+            "annoyance": 0,
+            "insult_counter": 0,
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
+    
+    # Check if stat exists
+    valid_stats = ["trust", "resentment", "attachment", "protectiveness", "affection_points", "annoyance", "insult_counter"]
+    if stat not in valid_stats:
+        return await ctx.send(f"A2: Invalid stat. Valid options: {', '.join(valid_stats)}")
+    
+    # Set the value
+    old_value = user_emotions[member.id].get(stat, 0)
+    user_emotions[member.id][stat] = value
+    
+    # Save the changes
+    asyncio.create_task(save_data())
+    
+    await ctx.send(f"A2: Set {member.display_name}'s {stat} from {old_value} to {value}.")
+
+@bot.command(name="memory", help="View memories stored about you")
+async def view_memories(ctx):
+    """View your stored memories"""
+    uid = ctx.author.id
+    
+    # Check if user has any memories
+    if uid not in memory_manager.key_memories or not memory_manager.key_memories[uid]:
+        return await ctx.send("A2: No significant memories stored.")
+    
+    # Get summary
+    summary = memory_manager.summaries.get(uid, "No summary available.")
+    
+    # Get key memories (up to 5 most recent)
+    memories = memory_manager.key_memories[uid]
+    memories.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    recent_memories = memories[:5]
+    
+    # Format the message
+    embed = discord.Embed(title="Your Memory Profile", color=discord.Color.purple(), timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="Summary", value=summary, inline=False)
+    
+    # Add interests if available
+    if uid in memory_manager.interests and memory_manager.interests[uid]:
+        interests = ", ".join(memory_manager.interests[uid])
+        embed.add_field(name="Your Interests", value=interests, inline=False)
+    
+    # Add key memories
+    for i, memory in enumerate(recent_memories):
+        content = memory.get("content", "No content")
+        timestamp = memory.get("timestamp", "Unknown time")
+        
+        # Convert ISO timestamp to readable format
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            formatted_time = dt.strftime("%Y-%m-%d %H:%M UTC")
+        except:
+            formatted_time = timestamp
+        
+        embed.add_field(name=f"Memory {i+1} ({formatted_time})", value=content, inline=False)
+    
+    embed.set_footer(text="A2 Memory System")
+    await ctx.send(embed=embed)
+
+@bot.command(name="add_memory", help="Add a key memory about a user")
+async def add_memory(ctx, member: discord.Member, *, memory_text: str):
+    """Add a key memory for a user (admin only)"""
+    # Check if user is admin
+    if not ctx.author.guild_permissions.administrator:
+        return await ctx.send("A2: Nice try. Only admins can use this.")
+    
+    # Add the memory
+    await memory_manager.add_key_memory(member.id, memory_text)
+    
+    await ctx.send(f"A2: Added memory about {member.display_name}.")
+
+@bot.command(name="clear_annoyance", help="Clear your annoyance stat")
+async def clear_annoyance(ctx):
+    """Reset your annoyance level with A2"""
+    uid = ctx.author.id
+    
+    if uid not in user_emotions:
+        return await ctx.send("A2: No data on you.")
+    
+    old_value = user_emotions[uid].get("annoyance", 0)
+    user_emotions[uid]["annoyance"] = 0
+    
+    # Save the changes
+    asyncio.create_task(save_data())
+    
+    await ctx.send(f"A2: Fine. Annoyance reset from {old_value} to 0.")
+
+@bot.command(name="insult_me", help="Get insulted by A2")
+async def insult_me(ctx):
+    """Request a random insult from A2"""
+    # Simply return a random comeback insult
+    insult = random.choice(comeback_insults)
+    await ctx.send(f"A2: {insult}")
+
+@bot.command(name="help_a2", aliases=["a2help"], help="Show A2 bot commands")
+async def a2_help(ctx):
+    """Show A2 specific commands"""
+    embed = discord.Embed(title="A2 Bot Commands", description="Available commands for interacting with A2", color=discord.Color.red())
+    
+    commands_list = [
+        {"name": "!stats", "value": "Show your relationship stats with A2"},
+        {"name": "!affection", "value": "Show relationship stats for all users (admin)"},
+        {"name": "!memory", "value": "View memories A2 has about you"},
+        {"name": "!clear_annoyance", "value": "Reset A2's annoyance with you"},
+        {"name": "!insult_me", "value": "Get a random insult from A2"},
+        {"name": "!set_stat [stat] [value] [user]", "value": "Set a stat value (admin only)"},
+        {"name": "!add_memory [user] [text]", "value": "Add a memory about a user (admin only)"}
+    ]
+    
+    for cmd in commands_list:
+        embed.add_field(name=cmd["name"], value=cmd["value"], inline=False)
+    
+    embed.set_footer(text="A2 will also respond to normal messages based on your affection level")
+    await ctx.send(embed=embed)
+
+# ─── Main Entry Point ─────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    try:
+        print("Starting A2 Bot...")
+        print(f"Using bot token: {DISCORD_BOT_TOKEN[:5]}...{DISCORD_BOT_TOKEN[-5:] if len(DISCORD_BOT_TOKEN) > 10 else ''}")
+        print(f"App ID: {DISCORD_APP_ID}")
+        bot.run(DISCORD_BOT_TOKEN, reconnect=True)
+    except Exception as e:
+        print(f"ERROR STARTING BOT: {e}")
+        import traceback
+        traceback.print_exc()────────────
+HISTORY_LIMIT = 10
+
+# Don't use deprecated asyncio.get_event_loop().run_until_complete() pattern
+# Instead, initialize data loading in the on_ready event handler
 
 # ─── Helper: Should Respond Logic ───────────────────────────────────────────
 def should_respond_to(content: str, uid: int, is_cmd: bool, is_mention: bool) -> bool:
@@ -1162,4 +1674,12 @@ async def a2_help(ctx):
 
 # ─── Main Entry Point ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    bot.run(DISCORD_BOT_TOKEN)
+    try:
+        print("Starting A2 Bot...")
+        print(f"Using bot token: {DISCORD_BOT_TOKEN[:5]}...{DISCORD_BOT_TOKEN[-5:] if len(DISCORD_BOT_TOKEN) > 10 else ''}")
+        print(f"App ID: {DISCORD_APP_ID}")
+        bot.run(DISCORD_BOT_TOKEN, reconnect=True)
+    except Exception as e:
+        print(f"ERROR STARTING BOT: {e}")
+        import traceback
+        traceback.print_exc()
