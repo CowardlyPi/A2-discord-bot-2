@@ -15,7 +15,8 @@ DAILY_AFFECTION_BONUS = 5          # Points added daily when trust ≥ threshold
 DAILY_BONUS_TRUST_THRESHOLD = 5    # Minimum trust for daily bonus
 
 # ─── JSON Storage Setup ───────────────────────────────────────────────────────
-DATA_FILE = Path("data.json")
+# Persist data into Railway volume (mount path must be /mnt/railway/volume)
+DATA_FILE = Path("/mnt/railway/volume/data.json")
 
 def load_data():
     global user_emotions, conversation_history, conversation_summaries
@@ -32,11 +33,14 @@ def load_data():
 
 def save_data():
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    json.dump({
-        "user_emotions": user_emotions,
-        "conversation_history": {str(k): v for k, v in conversation_history.items()},
-        "conversation_summaries": conversation_summaries
-    }, DATA_FILE.open("w", encoding="utf-8"), indent=2, ensure_ascii=False)
+    DATA_FILE.write_text(
+        json.dumps({
+            "user_emotions": user_emotions,
+            "conversation_history": {str(k): v for k, v in conversation_history.items()},
+            "conversation_summaries": conversation_summaries
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
 
 # ─── Configuration & State ────────────────────────────────────────────────────
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
