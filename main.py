@@ -108,7 +108,7 @@ def apply_reaction_modifiers(content: str, user_id: int):
             "last_interaction": datetime.now(timezone.utc).isoformat()
         }
     e = user_emotions[user_id]
-    for pat, effects in reaction_modifiers:
+    for pat, effects in 'apply_reaction_modifiers':
         if pat.search(content):
             for emo, val in effects.items():
                 if emo == "guilt_triggered":
