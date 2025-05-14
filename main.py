@@ -78,17 +78,18 @@ async def save_data():
     """Save each user profile separately."""
     for uid in list(user_emotions.keys()):
         await save_user_profile(uid)
-            conversation_history = {int(k): v for k, v in data.get("conversation_history", {}).items()}
-            conversation_summaries = data.get("conversation_summaries", {})
-        except json.JSONDecodeError:
-            user_emotions, conversation_history, conversation_summaries = {}, {}, {}
-    else:
-        user_emotions, conversation_history, conversation_summaries = {}, {}, {}
-    for e in user_emotions.values():
-        e.setdefault("annoyance", 0)
 
-
+# ─── Legacy save_data for other structures (unused) ─────────────────────────
 def save_data():
+    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DATA_FILE.write_text(
+        json.dumps({
+            "user_emotions": user_emotions,
+            "conversation_history": {str(k): v for k, v in conversation_history.items()},
+            "conversation_summaries": conversation_summaries
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )():
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     DATA_FILE.write_text(
         json.dumps({
@@ -326,10 +327,20 @@ async def on_reaction_add(reaction,user):
 @bot.command(name="affection", help="Show emotion stats for all users.")
 async def affection_all(ctx):
     if not user_emotions:
-        return await ctx.send("
+        return await ctx.send("A2: no interactions.")
+    lines = []
+    for uid, e in user_emotions.items():
+        member = bot.get_user(uid) or (ctx.guild and ctx.guild.get_member(uid))
+        mention = member.mention if member else f"<@{uid}>"
+        lines.append(
+            f"**{mention}** • Trust: {e.get('trust',0)}/10 • Attachment: {e.get('attachment',0)}/10"
+            f" • Protectiveness: {e.get('protectiveness',0)}/10 • Resentment: {e.get('resentment',0)}/10"
+            f" • Affection: {e.get('affection_points',0)} • Annoyance: {e.get('annoyance',0)}"
+        )
+    await ctx.send("
 ".join(lines))
 
-@bot.command(name="stats", help="Show your stats.")
+@bot.command(name="stats", help="Show your stats."), help="Show your stats.")
 async def stats(ctx):
     uid = ctx.author.id
     e = user_emotions.get(uid)
