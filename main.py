@@ -40,10 +40,46 @@ DAILY_BONUS_TRUST_THRESHOLD= 5   # min trust for bonus
 ANNOYANCE_DECAY_RATE       = 5   # points lost/hour
 ANNOYANCE_THRESHOLD        = 85  # ignore if above
 
-# ─── JSON Storage Setup ───────────────────────────────────────────────────────
-DATA_FILE = Path(os.getenv("DATA_DIR", "/mnt/railway/volume")) / "data.json"
+# ─── JSON Storage Setup (per-user profiles) ─────────────────────────────────
+DATA_DIR = Path(os.getenv("DATA_DIR", "/mnt/railway/volume"))
+USERS_DIR = DATA_DIR / "users"
+PROFILES_DIR = USERS_DIR / "profiles"
+PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
-def load_data():
+conversation_summaries = {}
+conversation_history = {}
+user_emotions = {}
+
+async def load_user_profile(user_id: int):
+    path = PROFILES_DIR / f"{user_id}.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+async def save_user_profile(user_id: int):
+    path = PROFILES_DIR / f"{user_id}.json"
+    profile = user_emotions.get(user_id, {})
+    path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
+
+async def load_data():
+    """Load all user profiles into memory."""
+    global user_emotions
+    user_emotions = {}
+    for file in PROFILES_DIR.glob("*.json"):
+        uid = int(file.stem)
+        user_emotions[uid] = await load_user_profile(uid)
+    # conversation_history and summaries remain in-memory resets
+
+async def save_data():
+    """Save each user profile separately."""
+    for uid in list(user_emotions.keys()):
+        await save_user_profile(uid)
+    # conversation_history, summaries not persisted
+
     global user_emotions, conversation_history, conversation_summaries
     if DATA_FILE.exists():
         try:
@@ -85,7 +121,8 @@ intents.reactions       = True
 intents.messages        = True
 intents.members         = True
 intents.guilds          = True
-bot = commands.Bot(command_prefix="!", intents=intents, application_id=DISCORD_APP_ID)
+PREFIXES = ["!", "!a2 "]
+bot = commands.Bot(command_prefix=PREFIXES, intents=intents, application_id=DISCORD_APP_ID)
 
 # ─── Per-user State ─────────────────────────────────────────────────────────
 user_emotions          = {}
@@ -241,19 +278,37 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.author.bot: return
-    uid,content=message.author.id,message.content.strip()
-    hist=conversation_history.setdefault(uid,[])
-    hist.append(f"User: {content}");
-    if len(hist)>HISTORY_LIMIT*2: hist.pop(0)
-    apply_reaction_modifiers(content,uid)
-    trust=user_emotions[uid]["trust"]
+    if message.author.bot:
+        return
+    uid, content = message.author.id, message.content.strip()
+    # Initialize user if missing
+    if uid not in user_emotions:
+        user_emotions[uid] = {"trust":0, "resentment":0, "attachment":0,
+                              "guilt_triggered":False, "protectiveness":0,
+                              "affection_points":0, "annoyance":0,
+                              "last_interaction":datetime.now(timezone.utc).isoformat()}
+    # Only respond when sufficiently affectionate or on commands/mentions
+    affection = user_emotions[uid]["affection_points"]
+    is_command = any(content.startswith(p) for p in PREFIXES)
+    is_mention = bot.user in message.mentions
+    if affection < 100 and not (is_command or is_mention):
+        return
+    # Record conversation history
+    hist = conversation_history.setdefault(uid, [])
+    hist.append(f"User: {content}")
+    if len(hist) > HISTORY_LIMIT * 2:
+        hist.pop(0)
+    # Apply modifiers and generate response
+    apply_reaction_modifiers(content, uid)
+    trust = user_emotions[uid]["trust"]
     await bot.process_commands(message)
-    if content.startswith(bot.command_prefix): return
-    resp=await generate_a2_response(content,trust,uid)
+    if is_command:
+        return
+    resp = await generate_a2_response(content, trust, uid)
     await message.channel.send(f"A2: {resp}")
-    hist.append(f"A2: {resp}");
-    if len(hist)>HISTORY_LIMIT*2: hist.pop(0)
+    hist.append(f"A2: {resp}")
+    if len(hist) > HISTORY_LIMIT * 2:
+        hist.pop(0)
     save_data()
 
 @bot.event
@@ -281,18 +336,19 @@ async def affection_all(ctx):
     lines=[]
     for uid,e in user_emotions.items():
         m=bot.get_user(uid) or (ctx.guild and ctx.guild.get_member(uid)); tag=m.mention if m else f"<@{uid}>"
-        lines.append(f"**{tag}** Trust:{e['trust']}/10 Aff:{e['affection_points']} Ann:{e['annoyance']}")
-    await ctx.send("\n".join(lines))
+        lines.append(f"**{tag}** Trust:{e['trust']}/10 Att:{e['attachment']} Aff:{e['affection_points']} Ann:{e['annoyance']}")
+    await ctx.send("
+".join(lines))
 
 @bot.command(name="stats",help="Show your stats.")
 async def stats(ctx):
     uid=ctx.author.id; e=user_emotions.get(uid)
     if not e: return await ctx.send("A2: no data on you.")
-    await ctx.send(f"Trust:{e['trust']}/10 Att:{e['attachment']} Aff:{e['affection_points']} Ann:{e['annoyance']}")
+    await ctx.send(f"Trust:{e['trust']}/10 Attachment:{e['attachment']}/10 Protect:{e['protectiveness']}/10 Resent:{e['resentment']}/10 Aff:{e['affection_points']} Ann:{e['annoyance']}")
 
 @bot.command(name="set_stat",help="Dev: set a stat.")
 async def set_stat(ctx,member:discord.Member,stat:str,value:float):
-    uid=member.id; e=user_emotions.setdefault(uid,{'trust':0,'resentment':0,'attachment':0,'affection_points':0,'annoyance':0,'guilt_triggered':False,'protectiveness':0,'last_interaction':datetime.now(timezone.utc).isoformat()})
+    uid=member.id; e=user_emotions.setdefault(uid,{'trust':0,'resentment':0,'attachment':0,'protectiveness':0,'affection_points':0,'annoyance':0,'guilt_triggered':False,'last_interaction':datetime.now(timezone.utc).isoformat()})
     if stat not in e: return await ctx.send(f"Bad stat: {stat}")
     limits={'trust':(0,10),'resentment':(0,10),'attachment':(0,10),'protectiveness':(0,10),'annoyance':(0,100),'affection_points':(-100,1000)}
     lo,hi=limits.get(stat,(0,10)); new=max(lo,min(hi,value)); e[stat]=new; save_data()
@@ -301,5 +357,26 @@ async def set_stat(ctx,member:discord.Member,stat:str,value:float):
 @bot.command(name="ping",help="Ping")
 async def ping(ctx): await ctx.send("Pong!")
 
-if __name__=="__main__": bot.run(DISCORD_BOT_TOKEN)
+# ─── Test Commands Suite ────────────────────────────────────────────────────
+@bot.command(name="test_decay", help="Run affection and annoyance decay immediately.")
+async def test_decay(ctx):
+    decay_affection.restart()
+    decay_annoyance.restart()
+    await ctx.send("A2: Decay tasks triggered.")
+
+@bot.command(name="test_daily", help="Run daily affection bonus immediately.")
+async def test_daily(ctx):
+    daily_affection_bonus.restart()
+    await ctx.send("A2: Daily affection bonus triggered.")
+
+@bot.command(name="view_emotions", help="View raw emotion data for a user.")
+async def view_emotions(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    uid = target.id
+    if uid not in user_emotions:
+        return await ctx.send(f"A2: No data for {target.mention}.")
+    e = user_emotions[uid]
+    await ctx.send(f"Emotion data for {target.mention}: {json.dumps(e)}")
+
+if __name__=="__main__": bot.run(DISCORD_BOT_TOKEN)=="__main__": bot.run(DISCORD_BOT_TOKEN)
 
