@@ -672,4 +672,134 @@ async def stats(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name="set_stat",aliases=["setstat"],help="Dev: set a stat for a user or yourself.")
-async def set_stat(ctx,stat:str,value:float,member
+async def set_stat(ctx, stat:str, value:float, member: discord.Member = None):
+    """Set an emotion stat value (admin only)"""
+    # Check if user is admin
+    if not ctx.author.guild_permissions.administrator:
+        return await ctx.send("A2: Nice try. Only admins can use this.")
+    
+    # Default to the command author if no member specified
+    if not member:
+        member = ctx.author
+    
+    # Ensure the user exists in the system
+    if member.id not in user_emotions:
+        user_emotions[member.id] = {
+            "trust": 0,
+            "resentment": 0,
+            "attachment": 0,
+            "guilt_triggered": False,
+            "protectiveness": 0,
+            "affection_points": 0,
+            "annoyance": 0,
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
+    
+    # Check if stat exists
+    valid_stats = ["trust", "resentment", "attachment", "protectiveness", "affection_points", "annoyance"]
+    if stat not in valid_stats:
+        return await ctx.send(f"A2: Invalid stat. Valid options: {', '.join(valid_stats)}")
+    
+    # Set the value
+    old_value = user_emotions[member.id].get(stat, 0)
+    user_emotions[member.id][stat] = value
+    
+    # Save the changes
+    asyncio.create_task(save_data())
+    
+    await ctx.send(f"A2: Set {member.display_name}'s {stat} from {old_value} to {value}.")
+
+@bot.command(name="memory", help="View memories stored about you")
+async def view_memories(ctx):
+    """View your stored memories"""
+    uid = ctx.author.id
+    
+    # Check if user has any memories
+    if uid not in memory_manager.key_memories or not memory_manager.key_memories[uid]:
+        return await ctx.send("A2: No significant memories stored.")
+    
+    # Get summary
+    summary = memory_manager.summaries.get(uid, "No summary available.")
+    
+    # Get key memories (up to 5 most recent)
+    memories = memory_manager.key_memories[uid]
+    memories.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    recent_memories = memories[:5]
+    
+    # Format the message
+    embed = discord.Embed(title="Your Memory Profile", color=discord.Color.purple(), timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="Summary", value=summary, inline=False)
+    
+    # Add interests if available
+    if uid in memory_manager.interests and memory_manager.interests[uid]:
+        interests = ", ".join(memory_manager.interests[uid])
+        embed.add_field(name="Your Interests", value=interests, inline=False)
+    
+    # Add key memories
+    for i, memory in enumerate(recent_memories):
+        content = memory.get("content", "No content")
+        timestamp = memory.get("timestamp", "Unknown time")
+        
+        # Convert ISO timestamp to readable format
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            formatted_time = dt.strftime("%Y-%m-%d %H:%M UTC")
+        except:
+            formatted_time = timestamp
+        
+        embed.add_field(name=f"Memory {i+1} ({formatted_time})", value=content, inline=False)
+    
+    embed.set_footer(text="A2 Memory System")
+    await ctx.send(embed=embed)
+
+@bot.command(name="add_memory", help="Add a key memory about a user")
+async def add_memory(ctx, member: discord.Member, *, memory_text: str):
+    """Add a key memory for a user (admin only)"""
+    # Check if user is admin
+    if not ctx.author.guild_permissions.administrator:
+        return await ctx.send("A2: Nice try. Only admins can use this.")
+    
+    # Add the memory
+    await memory_manager.add_key_memory(member.id, memory_text)
+    
+    await ctx.send(f"A2: Added memory about {member.display_name}.")
+
+@bot.command(name="clear_annoyance", help="Clear your annoyance stat")
+async def clear_annoyance(ctx):
+    """Reset your annoyance level with A2"""
+    uid = ctx.author.id
+    
+    if uid not in user_emotions:
+        return await ctx.send("A2: No data on you.")
+    
+    old_value = user_emotions[uid].get("annoyance", 0)
+    user_emotions[uid]["annoyance"] = 0
+    
+    # Save the changes
+    asyncio.create_task(save_data())
+    
+    await ctx.send(f"A2: Fine. Annoyance reset from {old_value} to 0.")
+
+@bot.command(name="help_a2", aliases=["a2help"], help="Show A2 bot commands")
+async def a2_help(ctx):
+    """Show A2 specific commands"""
+    embed = discord.Embed(title="A2 Bot Commands", description="Available commands for interacting with A2", color=discord.Color.red())
+    
+    commands_list = [
+        {"name": "!stats", "value": "Show your relationship stats with A2"},
+        {"name": "!affection", "value": "Show relationship stats for all users (admin)"},
+        {"name": "!memory", "value": "View memories A2 has about you"},
+        {"name": "!clear_annoyance", "value": "Reset A2's annoyance with you"},
+        {"name": "!set_stat [stat] [value] [user]", "value": "Set a stat value (admin only)"},
+        {"name": "!add_memory [user] [text]", "value": "Add a memory about a user (admin only)"}
+    ]
+    
+    for cmd in commands_list:
+        embed.add_field(name=cmd["name"], value=cmd["value"], inline=False)
+    
+    embed.set_footer(text="A2 will also respond to normal messages based on your affection level")
+    await ctx.send(embed=embed)
+
+# ─── Main Entry Point ─────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    bot.run(DISCORD_BOT_TOKEN)
