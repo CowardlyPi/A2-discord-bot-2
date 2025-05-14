@@ -97,6 +97,27 @@ PREFIXES = ["!", "!a2 "]
 bot = commands.Bot(command_prefix=PREFIXES, intents=intents, application_id=DISCORD_APP_ID)
 
 HISTORY_LIMIT = 10
+
+# ─── Reaction Modifier Handler ───
+def apply_reaction_modifiers(content: str, user_id: int):
+    if user_id not in user_emotions:
+        user_emotions[user_id] = {
+            "trust": 0, "resentment": 0, "attachment": 0,
+            "guilt_triggered": False, "protectiveness": 0,
+            "affection_points": 0, "annoyance": 0,
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
+    e = user_emotions[user_id]
+    for pat, effects in reaction_modifiers:
+        if pat.search(content):
+            for emo, val in effects.items():
+                if emo == "guilt_triggered":
+                    e[emo] = True
+                else:
+                    e[emo] = max(0, min(10, e[emo] + val))
+    e["trust"] = min(10, e["trust"] + 0.25)
+    e["last_interaction"] = datetime.now(timezone.utc).isoformat()
+    asyncio.create_task(save_data())
 # ─── Tasks ───
 @tasks.loop(minutes=10)
 async def check_inactive_users():
