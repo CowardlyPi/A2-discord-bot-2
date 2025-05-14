@@ -91,7 +91,11 @@ reaction_modifiers = [
     (re.compile(r"\bi trust you\b",re.I),         {"trust":2}),
     (re.compile(r"\bi hate you\b",re.I),          {"resentment":3,"trust":-2}),
 ]
-provoking_lines = ["Still mad? Good.","You again? Tch.","What?""]
+provoking_lines = [
+    "Still mad? Good.",
+    "You again? Tch.",
+    "What?"
+]
 warm_lines      = ["...Checking in.","Still breathing?","Thought you got scrapped."]
 insult_severity_patterns = reaction_modifiers  # repurpose for severity
 # Sexual regex unchanged
