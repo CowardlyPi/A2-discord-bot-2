@@ -9,19 +9,28 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-# Attempt to import local transformers for summarization and classification
+# ─── Local Transformers Pipeline Attempt ──────────────────────────────────────
+HAVE_TRANSFORMERS = False
+local_summarizer = None
+local_toxic = None
+local_sentiment = None
 try:
     from transformers import pipeline
     HAVE_TRANSFORMERS = True
-    # ─── Local LLM Pipelines ────────────────────────────────────────────────────
-    local_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    local_toxic     = pipeline("text-classification", model="unitary/toxic-bert", return_all_scores=True)
-    local_sentiment= pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    local_summarizer = pipeline(
+        "summarization", model="facebook/bart-large-cnn"
+    )
+    local_toxic = pipeline(
+        "text-classification",
+        model="unitary/toxic-bert",
+        return_all_scores=True
+    )
+    local_sentiment = pipeline(
+        "sentiment-analysis",
+        model="distilbert-base-uncased-finetuned-sst-2-english"
+    )
 except ImportError:
-    HAVE_TRANSFORMERS = False
-    local_summarizer = None
-    local_toxic     = None
-    local_sentiment = None
+    pass
 
 # ─── Dynamic Affection & Annoyance Settings ───────────────────────────────── ───────────────────────────────────────────────────────
 DATA_FILE = Path("/mnt/railway/volume/data.json")  # persistent mount
