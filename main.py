@@ -8,25 +8,22 @@ import random
 import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+
 # Attempt to import local transformers for summarization and classification
 try:
     from transformers import pipeline
     HAVE_TRANSFORMERS = True
-    # ─── Dynamic Affection & Annoyance Settings ───────────────────────────────── ─────────────────────────────────
+    # ─── Local LLM Pipelines ────────────────────────────────────────────────────
+    local_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+    local_toxic     = pipeline("text-classification", model="unitary/toxic-bert", return_all_scores=True)
+    local_sentiment= pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+except ImportError:
+    HAVE_TRANSFORMERS = False
+    local_summarizer = None
+    local_toxic     = None
+    local_sentiment = None
 
-# ─── Local LLM Pipelines ────────────────────────────────────────────────────
-local_summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-local_toxic     = pipeline("text-classification", model="unitary/toxic-bert", return_all_scores=True)
-local_sentiment= pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-
-# ─── Dynamic Affection & Annoyance Settings ─────────────────────────────────
-AFFECTION_DECAY_RATE       = 1   # points lost/hour
-DAILY_AFFECTION_BONUS      = 5   # points/day if trust ≥ threshold
-DAILY_BONUS_TRUST_THRESHOLD= 5
-ANNOYANCE_DECAY_RATE       = 5   # points lost/hour
-ANNOYANCE_THRESHOLD        = 85  # ignore if above
-
-# ─── JSON Storage Setup ───────────────────────────────────────────────────────
+# ─── Dynamic Affection & Annoyance Settings ───────────────────────────────── ───────────────────────────────────────────────────────
 DATA_FILE = Path("/mnt/railway/volume/data.json")  # persistent mount
 
 def load_data():
