@@ -78,13 +78,7 @@ async def save_data():
     """Save each user profile separately."""
     for uid in list(user_emotions.keys()):
         await save_user_profile(uid)
-    # conversation_history, summaries not persisted
-
-    global user_emotions, conversation_history, conversation_summaries
-    if DATA_FILE.exists():
-        try:
-            data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-            user_emotions          = data.get("user_emotions", {})
+)
             conversation_history   = {int(k): v for k, v in data.get("conversation_history", {}).items()}
             conversation_summaries = data.get("conversation_summaries", {})
         except json.JSONDecodeError:
@@ -333,17 +327,8 @@ async def on_reaction_add(reaction,user):
 @bot.command(name="affection", help="Show emotion stats for all users.")
 async def affection_all(ctx):
     if not user_emotions:
-        return await ctx.send("A2: no interactions.")
-    lines = []
-    for uid, e in user_emotions.items():
-        member = bot.get_user(uid) or (ctx.guild and ctx.guild.get_member(uid))
-        mention = member.mention if member else f"<@{uid}>"
-        lines.append(
-            f"**{mention}** • Trust: {e.get('trust',0)}/10 • Attachment: {e.get('attachment',0)}/10"
-            f" • Protectiveness: {e.get('protectiveness',0)}/10 • Resentment: {e.get('resentment',0)}/10"
-            f" • Affection: {e.get('affection_points',0)} • Annoyance: {e.get('annoyance',0)}"
-        )
-    await ctx.send("".join(lines))
+        return await ctx.send("
+".join(lines))
 
 @bot.command(name="stats", help="Show your stats.")
 async def stats(ctx):
