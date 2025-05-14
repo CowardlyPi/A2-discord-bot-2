@@ -200,7 +200,6 @@ def apply_reaction_modifiers(content: str, user_id: int):
                 if emo == "guilt_triggered": e[emo] = True
                 else: e[emo] = max(0,min(10,e.get(emo,0)+val))
     e["trust"] = min(10,e.get("trust",0)+0.25)
-    # skip detailed toxicity/sentiment for brevity
     e["last_interaction"] = datetime.now(timezone.utc).isoformat()
     record_interaction(user_id)
     asyncio.create_task(save_data())
@@ -227,7 +226,8 @@ def generate_a2_response_sync(content: str, trust: float, uid: int) -> str:
     if recent:
         prompt += "Recent:\n" + "\n".join(recent) + "\n"
     prompt += f"User: {content}\nA2:"
-        try:
+
+    try:
         res = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": prompt}],
@@ -237,7 +237,6 @@ def generate_a2_response_sync(content: str, trust: float, uid: int) -> str:
         return res.choices[0].message.content.strip()
     except Exception:
         return "...Network glitch. Try again later."
-    )
 
 async def generate_a2_response(content: str, trust: float, uid: int) -> str:
     return await asyncio.to_thread(generate_a2_response_sync, content, trust, uid)
@@ -297,10 +296,8 @@ async def on_message(message):
     if is_cmd: return
     trust = user_emotions[uid]["trust"]
     resp = await generate_a2_response(content, trust, uid)
-    # 15% interest reply
     if random.random() < 0.15:
         await message.reply(f"A2: {resp}{random_quirk()}")
-    # 10% mention event
     elif user_emotions[uid]["affection_points"] >= 700 and random.random() < 0.10:
         await message.channel.send(f"{message.author.mention} A2: {resp}{random_quirk()}")
     else:
@@ -337,15 +334,13 @@ async def set_stat(ctx, stat: str, value: float, member: discord.Member=None):
     target = member or ctx.author; uid = target.id
     e = user_emotions.setdefault(uid, {"trust":0,"resentment":0,"attachment":0,"protectiveness":0,"affection_points":0,"annoyance":0,"guilt_triggered":False,"curiosity":0,"boredom":0,"last_interaction":datetime.now(timezone.utc).isoformat()})
     limits = {'trust':(0,10),'resentment':(0,10),'attachment':(0,10),'protectiveness':(0,10),'annoyance':(0,100),'affection_points':(-100,1000)}
-    key = stat.lower();
-    if key=='affection': key='affection_points'
+    key = stat.lower(); if key=='affection': key='affection_points'
     if key not in limits: return await ctx.send(f"A2: Unknown stat '{stat}'.")
     lo, hi = limits[key]; e[key] = max(lo, min(hi, value)); asyncio.create_task(save_data())
     await ctx.send(f"A2: Set {key} to {e[key]} for {target.mention}.")
 
 @bot.command(name="ping", help="Ping the bot.")
-async def ping(ctx):
-    await ctx.send("Pong!")
+async def ping(ctx): await ctx.send("Pong!")
 
 @bot.command(name="test_interest", help="Trigger interest reply.")
 async def test_interest(ctx):
@@ -353,8 +348,7 @@ async def test_interest(ctx):
     await msg.reply("A2: Interested! (test event)")
 
 @bot.command(name="test_mention", help="Trigger mention event.")
-async def test_mention(ctx):
-    await ctx.send(f"{ctx.author.mention} A2: Hello there! (test mention)")
+async def test_mention(ctx): await ctx.send(f"{ctx.author.mention} A2: Hello there! (test mention)")
 
 @bot.command(name="global_stats", help="Show aggregate stats.")
 async def global_stats(ctx):
