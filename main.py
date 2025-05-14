@@ -259,7 +259,6 @@ async def on_reaction_add(reaction, user):
     save_data()
 
 # ─── Commands ────────────────────────────────────────────────────────────────
-```python
 @bot.command(name="affection", help="Show emotion stats for all users.")
 async def affection_all(ctx):
     if not user_emotions:
@@ -269,18 +268,26 @@ async def affection_all(ctx):
         member = bot.get_user(uid) or ctx.guild.get_member(uid)
         mention = member.mention if member else f"<@{uid}>"
         lines.append(
-            f"**{mention}**\n"
-            f"• Trust: {e['trust']}/10\n"
-            f"• Attachment: {e['attachment']}/10\n"
-            f"• Protectiveness: {e['protectiveness']}/10\n"
-            f"• Resentment: {e['resentment']}/10\n"
-            f"• Affection Points: {e['affection_points']}\n"
-            f"• Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}\n"
+            f"**{mention}**
+"
+            f"• Trust: {e['trust']}/10
+"
+            f"• Attachment: {e['attachment']}/10
+"
+            f"• Protectiveness: {e['protectiveness']}/10
+"
+            f"• Resentment: {e['resentment']}/10
+"
+            f"• Affection Points: {e['affection_points']}
+"
+            f"• Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}
+"
             "――"
         )
-    await ctx.send("A2: Current affection with all users:\n" + "\n".join(lines))
-```\
-```python
+    await ctx.send("A2: Current affection with all users:
+" + "
+".join(lines))
+
 @bot.command(name="stats", help="Show your emotion stats.")
 async def stats(ctx):
     uid = ctx.author.id
@@ -288,16 +295,20 @@ async def stats(ctx):
         return await ctx.send("A2: Tch... no data on you.")
     e = user_emotions[uid]
     report = (
-        f"Trust: {e['trust']}/10\n"
-        f"Attachment: {e['attachment']}/10\n"
-        f"Protectiveness: {e['protectiveness']}/10\n"
-        f"Resentment: {e['resentment']}/10\n"
-        f"Affection Points: {e['affection_points']}\n"
+        f"Trust: {e['trust']}/10
+"
+        f"Attachment: {e['attachment']}/10
+"
+        f"Protectiveness: {e['protectiveness']}/10
+"
+        f"Resentment: {e['resentment']}/10
+"
+        f"Affection Points: {e['affection_points']}
+"
         f"Guilt Triggered: {'Yes' if e['guilt_triggered'] else 'No'}"
     )
     await ctx.send(f"A2: {report}")
-```\
-```python
+
 @bot.command(name="users", help="List tracked users.")
 async def list_users(ctx):
     if not user_emotions:
@@ -306,9 +317,9 @@ async def list_users(ctx):
         (bot.get_user(uid).mention if bot.get_user(uid) else f"<@{uid}>")
         for uid in user_emotions
     ]
-    await ctx.send("A2: Tracked users:\n" + ", ".join(mentions))
-```\
-```python
+    await ctx.send("A2: Tracked users:
+" + ", ".join(mentions))
+
 @bot.command(name="reset", help="Reset a user's data (dev).")
 async def reset(ctx, member: discord.Member):
     uid = member.id
@@ -320,27 +331,26 @@ async def reset(ctx, member: discord.Member):
         await ctx.send(f"A2: Reset data for {member.mention}.")
     else:
         await ctx.send(f"A2: No data for {member.mention}.")
-```\
-```python
+
 @bot.command(name="ping", help="Ping the bot.")
 async def ping(ctx):
     await ctx.send("Pong!")
-```\
-```python
+
 @bot.command(name="incr_trust", help="Dev: increment trust.")
 async def incr_trust(ctx, member: discord.Member, amount: float):
     uid = member.id
     if uid not in user_emotions:
-        user_emotions[uid] = {"trust":0,"resentment":0,"attachment":0,
-                              "guilt_triggered":False,"protectiveness":0,
-                              "affection_points":0,
-                              "last_interaction":datetime.now(timezone.utc).isoformat()}
+        user_emotions[uid] = {
+            "trust":0, "resentment":0, "attachment":0,
+            "guilt_triggered":False, "protectiveness":0,
+            "affection_points":0,
+            "last_interaction":datetime.now(timezone.utc).isoformat()
+        }
     old = user_emotions[uid]["trust"]
     new = max(0, min(10, old + amount))
     user_emotions[uid]["trust"] = new
     save_data()
     await ctx.send(f"A2: Trust for {member.mention} changed from {old} to {new}/10.")
-```\
-```python
+
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
