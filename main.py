@@ -332,12 +332,7 @@ async def on_reaction_add(reaction,user):
 # ─── Commands ───────────────────────────────────────────────────────────────
 @bot.command(name="affection",help="Show emotion stats for all users.")
 async def affection_all(ctx):
-    if not user_emotions: return await ctx.send("A2: no interactions.")
-    lines=[]
-    for uid,e in user_emotions.items():
-        m=bot.get_user(uid) or (ctx.guild and ctx.guild.get_member(uid)); tag=m.mention if m else f"<@{uid}>"
-        lines.append(f"**{tag}** Trust:{e['trust']}/10 Att:{e['attachment']} Aff:{e['affection_points']} Ann:{e['annoyance']}")
-    await ctx.send("
+    if not user_emotions: return await ctx.send("
 ".join(lines))
 
 @bot.command(name="stats",help="Show your stats.")
@@ -378,5 +373,5 @@ async def view_emotions(ctx, member: discord.Member = None):
     e = user_emotions[uid]
     await ctx.send(f"Emotion data for {target.mention}: {json.dumps(e)}")
 
-if __name__=="__main__": bot.run(DISCORD_BOT_TOKEN)=="__main__": bot.run(DISCORD_BOT_TOKEN)
-
+if __name__=="__main__":
+    bot.run(DISCORD_BOT_TOKEN)
