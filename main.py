@@ -182,7 +182,7 @@ class MemoryManager:
         if len(self.raw_history[user_id]) < self.summary_threshold:
             return
         
-        # Use local summarizer if available, otherwise use OpenAI
+        # Use local summarizer if available, otherwise use rule-based summarization
         messages = self.format_history_for_summarization(user_id)
         
         if HAVE_TRANSFORMERS and local_summarizer:
@@ -209,7 +209,57 @@ class MemoryManager:
             except Exception as e:
                 print(f"Local summarization failed: {e}")
         
-        # Fall back to OpenAI
+        # Check if we should use OpenAI (limit to once per day per user for summary)
+        last_summary_time = self.last_summarized.get(user_id, 0)
+        current_time = time.time()
+        
+        # If it's been less than 24 hours, use rule-based summarization
+        if current_time - last_summary_time < 86400:  # 24 hours in seconds
+            # Simple rule-based summarization - extract key facts about the user
+            user_facts = []
+            topics_mentioned = set()
+            sentiment = "neutral"
+            
+            # Process messages to extract basic information
+            for msg in messages:
+                if msg.get("author") == "User":
+                    content = msg.get("content", "").lower()
+                    
+                    # Extract interests
+                    for topic in self.interests.get(user_id, set()):
+                        if topic in content and topic not in topics_mentioned:
+                            user_facts.append(f"User talked about {topic}")
+                            topics_mentioned.add(topic)
+                    
+                    # Basic sentiment analysis
+                    positive_words = ["like", "love", "happy", "good", "great", "enjoy", "thank"]
+                    negative_words = ["hate", "dislike", "angry", "bad", "terrible", "annoying"]
+                    
+                    pos_count = sum(content.count(word) for word in positive_words)
+                    neg_count = sum(content.count(word) for word in negative_words)
+                    
+                    if pos_count > neg_count:
+                        sentiment = "positive"
+                    elif neg_count > pos_count:
+                        sentiment = "negative"
+            
+            # Create a simple summary
+            if user_facts:
+                fact_summary = "\n".join([f"- {fact}" for fact in user_facts[:5]])
+                simple_summary = f"Conversation sentiment: {sentiment}\nKey points:\n{fact_summary}"
+                
+                # Update the user's summary
+                if user_id not in self.summaries:
+                    self.summaries[user_id] = simple_summary
+                else:
+                    # Combine summaries
+                    self.summaries[user_id] = f"{self.summaries[user_id]}\n\nRecent: {simple_summary}"
+                
+                # Mark for saving
+                self.dirty_users.add(user_id)
+                return
+        
+        # Fall back to OpenAI if we haven't summarized in 24 hours
         try:
             # Format for API
             prompt = "Summarize this conversation into bullet points focusing on key facts about the user and important events, under 200 tokens:\n"
@@ -245,8 +295,9 @@ class MemoryManager:
                     combined = f"{self.summaries[user_id]}\n" + "\n".join(unique_new_points)
                     self.summaries[user_id] = combined
             
-            # Mark for saving
+            # Mark for saving and update last summarized time
             self.dirty_users.add(user_id)
+            self.last_summarized[user_id] = current_time
             
         except Exception as e:
             print(f"OpenAI summarization failed: {e}")
@@ -326,26 +377,60 @@ class MemoryManager:
     
     async def update_conversation_topic(self, user_id, message, ai_response=None):
         """Update the tracked conversation topic"""
-        # This could be more sophisticated with topic modeling
-        # Simple implementation for now
-        try:
-            prompt = f"Identify the main topic of this conversation in 3 words or less:\nHuman: {message}"
-            if ai_response:
-                prompt += f"\nAI: {ai_response}"
+        # Use simple keyword extraction instead of OpenAI API
+        # This replaces an API call with a local algorithm
+        
+        common_topics = [
+            "combat", "android", "emotions", "yorha", "machine", "humanity",
+            "existence", "war", "memory", "programming", "games", "feelings",
+            "mission", "help", "death", "life", "future", "past", "friends",
+            "enemies", "robots", "personal", "weapons", "fighting", "commands"
+        ]
+        
+        # Combine user message and AI response
+        combined_text = message.lower()
+        if ai_response:
+            combined_text += " " + ai_response.lower()
+        
+        # Count occurrences of each topic
+        topic_counts = {}
+        for topic in common_topics:
+            count = combined_text.count(topic)
+            if count > 0:
+                topic_counts[topic] = count
+        
+        # Get the most frequent topics (up to 3)
+        if topic_counts:
+            top_topics = sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            topic = " ".join([t[0] for t in top_topics])
             
-            res = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=10
-            )
+            # If we found topics, update
+            if topic:
+                self.last_topics[user_id] = topic
+                self.dirty_users.add(user_id)
+                return
+        
+        # Fallback if no common topics found - use simple text processing
+        words = combined_text.split()
+        # Remove common stop words
+        stop_words = {"the", "a", "an", "in", "on", "at", "to", "for", "with", "by", "about", "like", "through"}
+        filtered_words = [w for w in words if w not in stop_words and len(w) > 3]
+        
+        if filtered_words:
+            # Get 3 most common words
+            word_counts = {}
+            for word in filtered_words:
+                if word in word_counts:
+                    word_counts[word] += 1
+                else:
+                    word_counts[word] = 1
             
-            topic = res.choices[0].message.content.strip()
+            most_common = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            topic = " ".join([w[0] for w in most_common])
+            
             self.last_topics[user_id] = topic
             self.dirty_users.add(user_id)
-            
-        except Exception as e:
-            print(f"Topic extraction failed: {e}")
+        # If all else fails, keep the previous topic
 
 # --- Rest of the code remains largely the same ---
 
@@ -517,6 +602,19 @@ def apply_reaction_modifiers(content: str, user_id: int):
 
 # ─── A2 Response ─────────────────────────────────────────────────────────────
 async def generate_a2_response(user_input:str, trust:float, user_id:int) -> str:
+    # Check for cached responses to similar questions first
+    cached_response = check_response_cache(user_input, user_id)
+    if cached_response:
+        # If we found a cached response, use it directly
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", cached_response)
+        
+        # Update conversation tracking
+        await memory_manager.extract_interests(user_id, user_input)
+        await memory_manager.update_conversation_topic(user_id, user_input, cached_response)
+        
+        return cached_response
+    
     # Get memory context
     memory_context = memory_manager.get_memory_context(user_id)
     
@@ -530,44 +628,98 @@ async def generate_a2_response(user_input:str, trust:float, user_id:int) -> str:
     # Extract possible topics of interest
     await memory_manager.extract_interests(user_id, user_input)
     
-    # Use the better model for high trust users
-    model = "gpt-3.5-turbo" if trust < 5 else "gpt-4"
+    # Check annoyance level - if too high, use canned responses
+    annoyance = user_emotions.get(user_id, {}).get("annoyance", 0)
+    if annoyance > ANNOYANCE_THRESHOLD:
+        annoyed_responses = [
+            "Not now.",
+            "...",
+            "I'm busy.",
+            "Go away.",
+            "Can't talk.",
+            "Leave me alone.",
+            "Not interested.",
+            "Whatever."
+        ]
+        response = random.choice(annoyed_responses)
+        
+        # Store the message exchange
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", response)
+        
+        return response
     
-    # Construct the prompt with memory integration
-    prompt = A2_PERSONA + f"\nTrust: {trust}/10\n"
+    # Check for simple queries that can be answered without API
+    simple_response = check_simple_patterns(user_input)
+    if simple_response:
+        # Store the message exchange
+        await memory_manager.add_message(user_id, "User", user_input)
+        await memory_manager.add_message(user_id, "A2", simple_response)
+        
+        # Update topics
+        await memory_manager.update_conversation_topic(user_id, user_input, simple_response)
+        
+        return simple_response
     
-    # Add memory context if available
-    if memory_context:
-        prompt += f"{memory_context}\n"
+    # Use different models based on trust and query complexity
+    # Use cheaper model for simple queries
+    content_length = len(user_input.split())
+    is_complex = content_length > 20 or "?" in user_input or any(word in user_input.lower() for word in ["explain", "why", "how", "what", "when", "where"])
     
-    # Add specific memories if available
-    if specific_memories:
-        prompt += f"{specific_memories}\n"
+    # Use GPT-4 selectively for complex queries from trusted users
+    if trust >= 5 and is_complex:
+        model = "gpt-4"
+    else:
+        model = "gpt-3.5-turbo"
     
-    # Add recent conversation history
-    recent_history = []
-    if user_id in memory_manager.raw_history:
-        recent = list(memory_manager.raw_history[user_id])[-HISTORY_LIMIT:]
-        for msg in recent:
-            if msg["author"] == "User":
-                recent_history.append(f"User: {msg['content']}")
-            else:
-                recent_history.append(f"A2: {msg['content']}")
-    
-    if recent_history:
-        prompt += "Recent conversation:\n" + "\n".join(recent_history) + "\n"
-    
-    # Add the current user input
-    prompt += f"User: {user_input}\nA2:"
+    # Shorter prompt for low-trust users
+    if trust < 3:
+        prompt = f"{A2_PERSONA}\nKeep responses very brief.\n\nUser: {user_input}\nA2:"
+    else:
+        # Construct the prompt with memory integration
+        prompt = A2_PERSONA + f"\nTrust: {trust}/10\n"
+        
+        # Add memory context if available
+        if memory_context:
+            prompt += f"{memory_context}\n"
+        
+        # Add specific memories if available
+        if specific_memories:
+            prompt += f"{specific_memories}\n"
+        
+        # Add recent conversation history
+        recent_history = []
+        if user_id in memory_manager.raw_history:
+            # Only include last few messages for context to reduce token usage
+            history_limit = 3 if trust < 5 else HISTORY_LIMIT
+            recent = list(memory_manager.raw_history[user_id])[-history_limit:]
+            for msg in recent:
+                if msg["author"] == "User":
+                    recent_history.append(f"User: {msg['content']}")
+                else:
+                    recent_history.append(f"A2: {msg['content']}")
+        
+        if recent_history:
+            prompt += "Recent conversation:\n" + "\n".join(recent_history) + "\n"
+        
+        # Add the current user input
+        prompt += f"User: {user_input}\nA2:"
     
     try:
+        # Use shorter max_tokens for low trust or simple responses
+        max_tokens = 50 if trust < 3 or not is_complex else 100
+        
         res = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": prompt}],
             temperature=0.7,
-            max_tokens=100
+            max_tokens=max_tokens
         )
+        
         response = res.choices[0].message.content.strip()
+        
+        # Store in cache
+        add_to_response_cache(user_input, response, user_id)
         
         # Store the message exchange
         await memory_manager.add_message(user_id, "User", user_input)
@@ -584,17 +736,143 @@ async def generate_a2_response(user_input:str, trust:float, user_id:int) -> str:
         print(f"Error generating response: {e}")
         return "...I'm not in the mood."
 
+# Response caching to reduce API calls
+response_cache = {}
+CACHE_SIZE = 100
+CACHE_SIMILARITY_THRESHOLD = 0.8
+
+def add_to_response_cache(question, answer, user_id):
+    """Add a response to the cache"""
+    # Create a simple key from the normalized question
+    key = normalize_question(question)
+    
+    # Store with user_id so we maintain personal context
+    cache_entry = {
+        "question": question,
+        "answer": answer,
+        "user_id": user_id,
+        "timestamp": time.time()
+    }
+    
+    # If we already have this exact key, update it
+    if key in response_cache:
+        response_cache[key] = cache_entry
+    else:
+        # If cache is full, remove oldest entry
+        if len(response_cache) >= CACHE_SIZE:
+            oldest_key = min(response_cache.keys(), key=lambda k: response_cache[k]["timestamp"])
+            del response_cache[oldest_key]
+        
+        # Add new entry
+        response_cache[key] = cache_entry
+
+def check_response_cache(question, user_id):
+    """Check if we have a cached response to a similar question"""
+    normalized = normalize_question(question)
+    
+    # Check for exact match
+    if normalized in response_cache and response_cache[normalized]["user_id"] == user_id:
+        return response_cache[normalized]["answer"]
+    
+    # Check for similar questions
+    for key, entry in response_cache.items():
+        if entry["user_id"] == user_id:
+            similarity = calculate_similarity(normalized, key)
+            if similarity > CACHE_SIMILARITY_THRESHOLD:
+                return entry["answer"]
+    
+    return None
+
+def normalize_question(text):
+    """Normalize a question for caching purposes"""
+    # Convert to lowercase
+    text = text.lower()
+    
+    # Remove punctuation except question marks
+    text = ''.join(c for c in text if c.isalnum() or c.isspace() or c == '?')
+    
+    # Remove stop words (a basic list)
+    stop_words = {"the", "a", "an", "in", "on", "at", "to", "for", "with", "by", "about"}
+    words = text.split()
+    filtered_words = [w for w in words if w not in stop_words]
+    
+    return ' '.join(filtered_words)
+
+def calculate_similarity(text1, text2):
+    """Calculate a simple similarity score between two texts"""
+    # Convert texts to sets of words
+    set1 = set(text1.split())
+    set2 = set(text2.split())
+    
+    # Calculate Jaccard similarity
+    if not set1 or not set2:
+        return 0.0
+    
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    
+    return intersection / union
+
+def check_simple_patterns(user_input):
+    """Check for simple patterns that can be answered without API"""
+    user_input_lower = user_input.lower()
+    
+    # Check for insults first - higher priority
+    for pattern in insult_patterns:
+        if pattern.search(user_input_lower):
+            # Return a random comeback insult
+            return random.choice(comeback_insults)
+    
+    # Simple greeting patterns
+    greetings = {
+        "hello": ["Hey.", "What.", "...Hi."],
+        "hi": ["...Hi.", "Hey.", "What."],
+        "hey": ["Hey.", "What.", "..."],
+        "how are you": ["Functional.", "Surviving.", "...Fine."],
+        "good morning": ["Morning.", "...Whatever.", "Is it?"],
+        "good afternoon": ["Afternoon.", "...Yeah.", "Mhm."],
+        "good evening": ["Evening.", "...Night.", "Hmph."]
+    }
+    
+    for pattern, responses in greetings.items():
+        if pattern in user_input_lower:
+            return random.choice(responses)
+    
+    # Simple yes/no patterns
+    if user_input_lower.endswith("?"):
+        if len(user_input.split()) <= 5:  # Very short questions
+            return random.choice(["Maybe.", "Possibly.", "Can't say.", "Who knows.", "...Perhaps.", "Doubt it."])
+    
+    # Name pattern
+    if "your name" in user_input_lower or "who are you" in user_input_lower:
+        return "A2. YoRHa deserter."
+    
+    # Simple opinions
+    opinion_patterns = {
+        "like humans": ["They're... complicated.", "Hmph. Some are tolerable."],
+        "favorite weapon": ["My sword.", "Whatever gets the job done."],
+        "opinion on yorha": ["Abandoned them before they abandoned me.", "...Rather not talk about it."],
+        "think about machines": ["They're the enemy... mostly.", "Some are different. Most need destroying."]
+    }
+    
+    for pattern, responses in opinion_patterns.items():
+        if pattern in user_input_lower:
+            return random.choice(responses)
+    
+    return None
+
 # ─── Tasks ───────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=10)
 async def check_inactive_users():
-    now=datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
     for guild in bot.guilds:
         for member in guild.members:
             if member.bot or member.id not in user_emotions: continue
-            last=datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
-            if now-last>timedelta(hours=6):
-                dm=await member.create_dm()
-                msg=random.choice(warm_lines if user_emotions[member.id]["trust"]>=7 else provoking_lines)
+            last = datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
+            if now - last > timedelta(hours=6):
+                dm = await member.create_dm()
+                # Use appropriate check-in line based on trust level
+                msg = random.choice(warm_lines if user_emotions[member.id]["trust"] >= 7 else check_in_lines)
                 await dm.send(msg)
     asyncio.create_task(save_data())
 
