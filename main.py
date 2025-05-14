@@ -153,7 +153,7 @@ bot = commands.Bot(command_prefix=command_prefix, intents=intents, application_i
 
 # ─── Per-user State ─────────────────────────────────────────────────────────
 HISTORY_LIMIT = 10
-asyncio.get_event_loop().run_until_complete(load_data())
+asyncio.run(load_data())
 
 # ─── Persona & Reaction Modifiers ────────────────────────────────────────────
 A2_PERSONA = (
@@ -227,8 +227,16 @@ def generate_a2_response_sync(content: str, trust: float, uid: int) -> str:
     if recent:
         prompt += "Recent:\n" + "\n".join(recent) + "\n"
     prompt += f"User: {content}\nA2:"
-    return asyncio.get_event_loop().run_until_complete(
-        safe_openai_call(model=model, messages=[{"role":"system","content":prompt}], temperature=0.7, max_tokens=100)
+        try:
+        res = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            max_tokens=100
+        )
+        return res.choices[0].message.content.strip()
+    except Exception:
+        return "...Network glitch. Try again later."
     )
 
 async def generate_a2_response(content: str, trust: float, uid: int) -> str:
