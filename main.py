@@ -188,7 +188,13 @@ class MemoryManager:
         if HAVE_TRANSFORMERS and local_summarizer:
             try:
                 text = " ".join(msg.get("content", "") for msg in messages)
-                summary = local_summarizer(text, max_length=150, min_length=40)[0]["summary_text"]
+                
+                # Calculate dynamic max_length based on input length
+                input_length = len(text.split())
+                # Use half the input length, but keep it between 40 and 150 tokens
+                dynamic_max_length = min(150, max(40, input_length // 2))
+                
+                summary = local_summarizer(text, max_length=dynamic_max_length, min_length=min(30, dynamic_max_length - 10))[0]["summary_text"]
                 
                 # Store the summary
                 if user_id not in self.summaries:
@@ -207,13 +213,21 @@ class MemoryManager:
         try:
             # Format for API
             prompt = "Summarize this conversation into bullet points focusing on key facts about the user and important events, under 200 tokens:\n"
-            prompt += "\n".join([f"{msg['author']}: {msg['content']}" for msg in messages])
+            
+            # Join all messages for the prompt
+            conversation_text = "\n".join([f"{msg['author']}: {msg['content']}" for msg in messages])
+            prompt += conversation_text
+            
+            # Calculate appropriate max_tokens based on content length
+            conversation_length = len(conversation_text.split())
+            # Use a similar ratio as for the local model but with different limits for OpenAI
+            max_tokens = min(200, max(75, conversation_length // 3))
             
             res = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=200
+                max_tokens=max_tokens
             )
             
             summary = res.choices[0].message.content.strip()
