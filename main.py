@@ -330,7 +330,7 @@ async def on_reaction_add(reaction,user):
     save_data()
 
 # ─── Commands ───────────────────────────────────────────────────────────────
-@bot.command(name="affection",help="Show emotion stats for all users.")
+@bot.command(name="affection", help="Show emotion stats for all users.")
 async def affection_all(ctx):
     if not user_emotions:
         return await ctx.send("A2: no interactions.")
@@ -346,7 +346,7 @@ async def affection_all(ctx):
     await ctx.send("
 ".join(lines))
 
-@bot.command(name="stats",help="Show your stats."),help="Show your stats.")
+@bot.command(name="stats", help="Show your stats."),help="Show your stats."),help="Show your stats.")
 async def stats(ctx):
     uid=ctx.author.id; e=user_emotions.get(uid)
     if not e: return await ctx.send("A2: no data on you.")
