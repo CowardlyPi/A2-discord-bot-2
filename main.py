@@ -407,4 +407,4 @@ async def view_emotions(ctx, member: discord.Member = None):
     await ctx.send(f"Emotion data for {target.mention}: {json.dumps(e, indent=2)}")
 
 if __name__ == "__main__":
-    bot.run(DISCORD_BOT_TOKEN)=="__main__":bot.run(DISCORD_BOT_TOKEN)
+    bot.run(DISCORD_BOT_TOKEN)
