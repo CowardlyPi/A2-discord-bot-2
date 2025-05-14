@@ -337,8 +337,7 @@ async def affection_all(ctx):
             f" • Protectiveness: {e.get('protectiveness',0)}/10 • Resentment: {e.get('resentment',0)}/10"
             f" • Affection: {e.get('affection_points',0)} • Annoyance: {e.get('annoyance',0)}"
         )
-    await ctx.send("
-".join(lines))
+    await ctx.send("".join(lines))
 
 @bot.command(name="stats", help="Show your stats."), help="Show your stats.")
 async def stats(ctx):
