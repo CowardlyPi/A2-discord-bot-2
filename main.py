@@ -97,38 +97,41 @@ PREFIXES = ["!", "!a2 "]
 bot = commands.Bot(command_prefix=PREFIXES, intents=intents, application_id=DISCORD_APP_ID)
 
 HISTORY_LIMIT = 10
+# ─── Tasks ───
+@tasks.loop(minutes=10)
+async def check_inactive_users():
+    now = datetime.now(timezone.utc)
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.bot or member.id not in user_emotions:
+                continue
+            last = datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
+            if now - last > timedelta(hours=6):
+                dm = await member.create_dm()
+                if user_emotions[member.id]["trust"] >= 7:
+                    await dm.send(random.choice(warm_lines))
+                else:
+                    await dm.send(random.choice(provoking_lines))
+    await save_data()
 
-# ─── Persona & Reaction Modifiers ───
-A2_PERSONA = (
-    "You are A2, a rogue android from NieR: Automata. You speak in short, clipped, often sarcastic "
-    "sentences. You are emotionally guarded and never break character."
-)
-reaction_modifiers = [
-    (re.compile(r"\bi'll protect you\b", re.I),    {"trust":2,"protectiveness":1}),
-    (re.compile(r"\bi miss you\b", re.I),          {"attachment":1,"trust":1}),
-    (re.compile(r"\bhate you\b", re.I),            {"resentment":3,"trust":-2}),
-]
-provoking_lines = ["Still mad? Good.", "You again? Tch.", "What?"]
-warm_lines      = ["...Checking in.", "Still breathing?", "Thought you got scrapped."]
+@tasks.loop(hours=1)
+async def decay_affection():
+    for e in user_emotions.values():
+        e["affection_points"] = max(-100, e["affection_points"] - AFFECTION_DECAY_RATE)
+    await save_data()
 
-# ─── Reaction Modifier Handler ───
-def apply_reaction_modifiers(content: str, user_id: int):
-    if user_id not in user_emotions:
-        user_emotions[user_id] = {
-            "trust":0,"resentment":0,"attachment":0,
-            "guilt_triggered":False,"protectiveness":0,
-            "affection_points":0,"annoyance":0,
-            "last_interaction":datetime.now(timezone.utc).isoformat()
-        }
-    e = user_emotions[user_id]
-    for pat, effects in reaction_modifiers:
-        if pat.search(content):
-            for emo,val in effects.items():
-                if emo == "guilt_triggered": e[emo] = True
-                else: e[emo] = max(0,min(10,e[emo]+val))
-    e["trust"] = min(10, e["trust"]+0.25)
-    e["last_interaction"] = datetime.now(timezone.utc).isoformat()
-    asyncio.create_task(save_data())
+@tasks.loop(hours=1)
+async def decay_annoyance():
+    for e in user_emotions.values():
+        e["annoyance"] = max(0, e["annoyance"] - ANNOYANCE_DECAY_RATE)
+    await save_data()
+
+@tasks.loop(hours=24)
+async def daily_affection_bonus():
+    for e in user_emotions.values():
+        if e["trust"] >= DAILY_BONUS_TRUST_THRESHOLD:
+            e["affection_points"] = min(1000, e["affection_points"] + DAILY_AFFECTION_BONUS)
+    await save_data()
 
 @bot.event
 async def on_ready():
@@ -138,6 +141,61 @@ async def on_ready():
     decay_affection.start()
     decay_annoyance.start()
     daily_affection_bonus.start()
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    uid, content = message.author.id, message.content.strip()
+    if uid not in user_emotions:
+        user_emotions[uid] = {
+            "trust": 0, "resentment": 0, "attachment": 0,
+            "guilt_triggered": False, "protectiveness": 0,
+            "affection_points": 0, "annoyance": 0,
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
+    affection = user_emotions[uid]["affection_points"]
+    is_command = any(content.startswith(p) for p in PREFIXES)
+    is_mention = bot.user in message.mentions
+    if affection < 100 and not (is_command or is_mention):
+        return
+    hist = conversation_history.setdefault(uid, [])
+    hist.append(f"User: {content}")
+    if len(hist) > HISTORY_LIMIT * 2:
+        hist.pop(0)
+    apply_reaction_modifiers(content, uid)
+    trust = user_emotions[uid]["trust"]
+    await bot.process_commands(message)
+    if is_command:
+        return
+    resp = await generate_a2_response(content, trust, uid)
+    await message.channel.send(f"A2: {resp}")
+    hist.append(f"A2: {resp}")
+    if len(hist) > HISTORY_LIMIT * 2:
+        hist.pop(0)
+    await save_data()
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+    uid = user.id
+    if uid not in user_emotions:
+        user_emotions[uid] = {
+            "trust": 0, "resentment": 0, "attachment": 0,
+            "guilt_triggered": False, "protectiveness": 0,
+            "affection_points": 0, "annoyance": 0,
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
+    emo = str(reaction.emoji)
+    if emo in ["❤️", "💖", "💕"]:
+        user_emotions[uid]["attachment"] += 1
+        user_emotions[uid]["trust"] = min(10, user_emotions[uid]["trust"] + 1)
+    elif emo in ["😠", "👿"]:
+        user_emotions[uid]["resentment"] += 1
+    if reaction.message.author == bot.user:
+        await reaction.message.channel.send(f"A2: I saw that. Interesting choice, {user.name}.")
+    await save_data()
 
 @bot.command(name="affection", help="Show emotion stats for all users.")
 async def affection_all(ctx):
@@ -169,6 +227,50 @@ async def stats(ctx):
         f"Annoyance: {e.get('annoyance',0)}"
     )
     await ctx.send(f"A2: \n{report}")
+
+@bot.command(name="set_stat", help="Dev: set a stat.")
+async def set_stat(ctx, member: discord.Member, stat: str, value: float):
+    uid = member.id
+    e = user_emotions.setdefault(uid, {
+        'trust':0, 'resentment':0, 'attachment':0,
+        'protectiveness':0, 'affection_points':0,'annoyance':0,
+        'guilt_triggered':False, 'last_interaction':datetime.now(timezone.utc).isoformat()
+    })
+    if stat not in e:
+        return await ctx.send(f"A2: Unknown stat '{stat}'.")
+    limits = {
+        'trust': (0,10), 'resentment': (0,10), 'attachment': (0,10),
+        'protectiveness': (0,10), 'annoyance': (0,100), 'affection_points': (-100,1000)
+    }
+    lo, hi = limits.get(stat, (0,10))
+    new = max(lo, min(hi, value))
+    e[stat] = new
+    await save_data()
+    await ctx.send(f"A2: Set {stat} to {new} for {member.mention}.")
+
+@bot.command(name="ping", help="Ping the bot.")
+async def ping(ctx):
+    await ctx.send("Pong!")
+
+@bot.command(name="test_decay", help="Run affection and annoyance decay immediately.")
+async def test_decay(ctx):
+    decay_affection.restart()
+    decay_annoyance.restart()
+    await ctx.send("A2: Decay tasks triggered.")
+
+@bot.command(name="test_daily", help="Run daily affection bonus immediately.")
+async def test_daily(ctx):
+    daily_affection_bonus.restart()
+    await ctx.send("A2: Daily affection bonus triggered.")
+
+@bot.command(name="view_emotions", help="View raw emotion data for a user.")
+async def view_emotions(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    uid = target.id
+    if uid not in user_emotions:
+        return await ctx.send(f"A2: No data for {target.mention}.")
+    e = user_emotions[uid]
+    await ctx.send(f"Emotion data for {target.mention}: {json.dumps(e, indent=2)}")
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
