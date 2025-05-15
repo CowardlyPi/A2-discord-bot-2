@@ -649,8 +649,6 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
         )
     )
 reply = res.choices[0].message.content.strip()
-    
-    # Track response for analysis
     recent_responses.setdefault(user_id, deque(maxlen=MAX_RECENT_RESPONSES)).append({
         "content": reply,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1334,14 +1332,13 @@ async def relationship(ctx):
         color=discord.Color.dark_purple()
     )
     
-    # Create relationship progression bar
+ # Create relationship progression bar
     stages_bar = ""
     for i, stage in enumerate(RELATIONSHIP_LEVELS):
         if rel_data["current"] == stage:
             stages_bar += "**[" + stage["name"] + "]** → "
         elif i < RELATIONSHIP_LEVELS.index(rel_data["current"]):
             stages_bar += stage["name"] + " → "
-        elif i == RELATIONSHIP_LEVELS.index(rel_data["current"]) +
         elif i == RELATIONSHIP_LEVELS.index(rel_data["current"]) + 1:
             stages_bar += stage["name"] + " → ..."
             break
@@ -1356,7 +1353,6 @@ async def relationship(ctx):
         value=f"**{rel_data['current']['name']}**\n{rel_data['current']['description']}",
         inline=False
     )
-    
     # Add interaction stats
     stats = interaction_stats.get(uid, Counter())
     total = stats.get("total", 0)
