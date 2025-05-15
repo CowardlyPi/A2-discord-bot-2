@@ -401,12 +401,26 @@ def analyze_message_content(content, user_id):
 # ─── Enhanced Reaction Modifiers ────────────────────────────────────────────
 async def apply_enhanced_reaction_modifiers(content, user_id):
     if user_id not in user_emotions:
-        user_emotions[user_id] = {"trust": 0, "resentment": 0, "attachment": 0, "protectiveness": 0,
-                                  "affection_points": 0, "annoyance": 0,
-                                  "last_interaction": datetime.now(timezone.utc).isoformat(),
-                                  "interaction_count": 0}
+        user_emotions[user_id] = {
+            "trust": 0, 
+            "resentment": 0, 
+            "attachment": 0, 
+            "protectiveness": 0,
+            "affection_points": 0, 
+            "annoyance": 0,
+            "interaction_count": 0,  # Initialize with 0
+            "last_interaction": datetime.now(timezone.utc).isoformat()
+        }
+    
     e = user_emotions[user_id]
+    
+    # Ensure interaction_count exists
+    if "interaction_count" not in e:
+        e["interaction_count"] = 0
+        
     e["interaction_count"] += 1
+    
+    # Rest of the function remains the same...
     
     # Base trust bump
     e["trust"] = min(10, e.get("trust", 0) + 0.25)
