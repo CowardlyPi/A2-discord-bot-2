@@ -8,7 +8,10 @@ import random
 import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from collections import deque, defaultdict
+from collections import deque, defaultdict, Counter
+import matplotlib.pyplot as plt
+import io
+import math
 
 # ─── Local Transformers Pipeline Attempt ──────────────────────────────────────
 HAVE_TRANSFORMERS = False
@@ -41,6 +44,30 @@ DAILY_BONUS_TRUST_THRESHOLD = 5   # min trust for bonus
 ANNOYANCE_DECAY_RATE        = 5   # points lost/hour
 ANNOYANCE_THRESHOLD         = 85  # ignore if above
 
+# ─── Enhanced Dynamic Stats Settings ───────────────────────────────────────────
+# New constants for the dynamic system
+EMOTION_DECAY_MULTIPLIERS = {
+    'trust': 0.8,           # Trust decays slowly
+    'resentment': 0.7,      # Resentment lingers
+    'attachment': 0.9,      # Attachment is fairly persistent
+    'protectiveness': 0.85  # Protectiveness fades moderately
+}
+
+RANDOM_EVENT_CHANCE    = 0.08  # Base 8% chance per check
+EVENT_COOLDOWN_HOURS   = 12    # Minimum hours between random events
+MILESTONE_THRESHOLDS   = [10, 50, 100, 200, 500, 1000]
+RELATIONSHIP_LEVELS    = [
+    {"name": "Hostile", "threshold": 0, "description": "Sees you as a potential threat"},
+    {"name": "Wary", "threshold": 5, "description": "Tolerates your presence with caution"},
+    {"name": "Neutral", "threshold": 10, "description": "Acknowledges your existence"},
+    {"name": "Familiar", "threshold": 15, "description": "Recognizes you as a regular contact"},
+    {"name": "Tentative Ally", "threshold": 20, "description": "Beginning to see value in interactions"},
+    {"name": "Trusted", "threshold": 25, "description": "Willing to share limited information"},
+    {"name": "Companion", "threshold": 30, "description": "Values your continued presence"},
+    {"name": "Confidant", "threshold": 40, "description": "Will occasionally share vulnerabilities"},
+    {"name": "Bonded", "threshold": 50, "description": "Significant emotional connection established"}
+]
+
 # ─── JSON Storage Setup (per-user profiles) ─────────────────────────────────
 DATA_DIR      = Path(os.getenv("DATA_DIR", "/mnt/railway/volume"))
 USERS_DIR     = DATA_DIR / "users"
@@ -57,6 +84,13 @@ conversation_history   = defaultdict(list)
 user_emotions          = {}
 recent_responses       = {}
 MAX_RECENT_RESPONSES   = 10
+
+# ─── Enhanced Data Structures ───────────────────────────────────────────────
+user_memories = defaultdict(list)
+user_events = defaultdict(list)
+user_milestones = defaultdict(list)
+interaction_stats = defaultdict(Counter)
+relationship_progress = defaultdict(dict)
 
 # ─── Enhanced Personality States ─────────────────────────────────────────────
 PERSONALITY_STATES = {
@@ -99,6 +133,213 @@ PERSONALITY_STATES = {
         "temperature": 0.88,
     },
 }
+
+# ─── Enhanced Emotion & Relationship Functions ───────────────────────────────
+async def create_memory_event(user_id, event_type, description, emotional_impact=None):
+    """Creates a new memory event and stores it"""
+    if emotional_impact is None:
+        emotional_impact = {}
+    
+    if user_id not in user_memories:
+        user_memories[user_id] = []
+    
+    memory = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": event_type,
+        "description": description,
+        "emotional_impact": emotional_impact
+    }
+    
+    user_memories[user_id].append(memory)
+    
+    # Save to persistent storage
+    memory_path = PROFILES_DIR / f"{user_id}_memories.json"
+    memory_path.write_text(json.dumps(user_memories[user_id], indent=2), encoding="utf-8")
+    return memory
+
+def get_relationship_score(user_id):
+    """Calculate a comprehensive relationship score"""
+    e = user_emotions.get(user_id, {})
+    trust = e.get('trust', 0)
+    attachment = e.get('attachment', 0)
+    affection = e.get('affection_points', 0)
+    resentment = e.get('resentment', 0)
+    interactions = e.get('interaction_count', 0)
+    
+    # Calculate weighted score
+    raw_score = (
+        (trust * 2.0) + 
+        (attachment * 1.5) + 
+        (affection / 100 * 1.0) + 
+        (interactions / 50 * 0.5) - 
+        (resentment * 1.8)
+    )
+    
+    # Normalize to 0-100 scale
+    score = max(0, min(100, raw_score))
+    return score
+
+def get_relationship_stage(user_id):
+    """Determine the current relationship stage and progress"""
+    score = get_relationship_score(user_id)
+    
+    # Find current stage
+    current_stage = RELATIONSHIP_LEVELS[0]
+    for stage in RELATIONSHIP_LEVELS:
+        if score >= stage["threshold"]:
+            current_stage = stage
+        else:
+            break
+            
+    # Calculate progress to next stage
+    next_stage_idx = min(len(RELATIONSHIP_LEVELS) - 1, RELATIONSHIP_LEVELS.index(current_stage) + 1)
+    next_stage = RELATIONSHIP_LEVELS[next_stage_idx]
+    
+    if current_stage == next_stage:  # Already at max stage
+        progress = 100
+    else:
+        progress = ((score - current_stage["threshold"]) / 
+                   (next_stage["threshold"] - current_stage["threshold"])) * 100
+        progress = max(0, min(99, progress))  # Cap between 0-99%
+    
+    return {
+        "current": current_stage,
+        "next": next_stage if current_stage != next_stage else None,
+        "progress": progress,
+        "score": score
+    }
+
+def get_emotion_description(stat, value):
+    """Return human-readable descriptions for emotional stats"""
+    descriptions = {
+        "trust": [
+            "Hostile", "Suspicious", "Wary", "Cautious", "Neutral", 
+            "Accepting", "Comfortable", "Trusting", "Confiding", "Faithful"
+        ],
+        "attachment": [
+            "Distant", "Detached", "Aloof", "Reserved", "Neutral", 
+            "Interested", "Connected", "Attached", "Bonded", "Inseparable"
+        ],
+        "protectiveness": [
+            "Indifferent", "Unconcerned", "Aware", "Attentive", "Neutral",
+            "Guarded", "Watchful", "Protective", "Defensive", "Guardian"
+        ],
+        "resentment": [
+            "Accepting", "Forgiving", "Tolerant", "Patient", "Neutral",
+            "Annoyed", "Irritated", "Resentful", "Bitter", "Vengeful"
+        ]
+    }
+    
+    if stat not in descriptions:
+        return str(value)
+        
+    idx = min(9, int(value))
+    return descriptions[stat][idx]
+
+# ─── Enhanced Utility Functions ────────────────────────────────────────────────
+def generate_mood_description(user_id):
+    """Generate a contextual mood description based on emotional state"""
+    e = user_emotions.get(user_id, {})
+    
+    if e.get('annoyance', 0) > 80:
+        return "Highly irritated"
+    elif e.get('annoyance', 0) > 60:
+        return "Irritated"
+    elif e.get('annoyance', 0) > 40:
+        return "Annoyed"
+    
+    if e.get('trust', 0) < 3:
+        if e.get('resentment', 0) > 7:
+            return "Hostile"
+        else:
+            return "Suspicious"
+    
+    if e.get('trust', 0) > 8:
+        if e.get('attachment', 0) > 7:
+            return "Comfortable"
+        else:
+            return "Trusting"
+    
+    if e.get('attachment', 0) > 7:
+        return "Attached"
+    
+    if e.get('protectiveness', 0) > 7:
+        return "Protective"
+    
+    # Default moods based on affection
+    if e.get('affection_points', 0) > 500:
+        return "Amicable"
+    elif e.get('affection_points', 0) > 200:
+        return "Friendly"
+    elif e.get('affection_points', 0) > 0:
+        return "Neutral"
+    elif e.get('affection_points', 0) > -50:
+        return "Reserved"
+    else:
+        return "Cold"
+
+def calculate_response_modifiers(user_id):
+    """Calculate response modifiers based on emotional state"""
+    e = user_emotions.get(user_id, {})
+    modifiers = {
+        "brevity": 1.0,         # Higher = shorter responses
+        "sarcasm": 1.0,         # Higher = more sarcastic
+        "hostility": 1.0,       # Higher = more hostile
+        "openness": 1.0,        # Higher = more open/sharing
+        "personality": "default" # Personality state to use
+    }
+    
+    # Annoyance increases brevity and sarcasm
+    modifiers["brevity"] += (e.get('annoyance', 0) / 50)
+    modifiers["sarcasm"] += (e.get('annoyance', 0) / 40)
+    
+    # Resentment increases hostility
+    modifiers["hostility"] += (e.get('resentment', 0) / 5)
+    
+    # Trust and attachment increase openness
+    modifiers["openness"] += ((e.get('trust', 0) + e.get('attachment', 0)) / 10)
+    
+    # Personality selection based on emotion combinations
+    if e.get('trust', 0) > 8 and e.get('attachment', 0) > 7:
+        modifiers["personality"] = "trusting"
+    elif e.get('annoyance', 0) > 70:
+        modifiers["personality"] = "combat"
+    elif e.get('protectiveness', 0) > 8:
+        modifiers["personality"] = "protective"
+    
+    return modifiers
+
+async def record_interaction_data(user_id, message_content, response_content):
+    """Record data about this interaction for analysis"""
+    if user_id not in interaction_stats:
+        interaction_stats[user_id] = Counter()
+    
+    # Count this interaction
+    interaction_stats[user_id]["total"] += 1
+    
+    # Analyze message length
+    if len(message_content) < 20:
+        interaction_stats[user_id]["short_messages"] += 1
+    elif len(message_content) > 100:
+        interaction_stats[user_id]["long_messages"] += 1
+    
+    # Analyze question patterns
+    if "?" in message_content:
+        interaction_stats[user_id]["questions"] += 1
+    
+    # Record time of day
+    hour = datetime.now(timezone.utc).hour
+    if 5 <= hour < 12:
+        interaction_stats[user_id]["morning"] += 1
+    elif 12 <= hour < 18:
+        interaction_stats[user_id]["afternoon"] += 1
+    elif 18 <= hour < 22:
+        interaction_stats[user_id]["evening"] += 1
+    else:
+        interaction_stats[user_id]["night"] += 1
+    
+    # Save interaction data
+    await save_data()
 
 # ─── Mood Modifiers ─────────────────────────────────────────────────────────
 def determine_mood_modifiers(user_id):
@@ -166,8 +407,13 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
                                   "interaction_count": 0}
     e = user_emotions[user_id]
     e["interaction_count"] += 1
+    
     # Base trust bump
     e["trust"] = min(10, e.get("trust", 0) + 0.25)
+    
+    # Track interaction type for stats
+    interaction_stats[user_id]["total"] += 1
+    
     # Toxicity annoyance
     inc = 0
     if HAVE_TRANSFORMERS and local_toxic:
@@ -177,23 +423,92 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
                 if item["label"].lower() in ("insult", "toxicity"):
                     sev = int(item["score"] * 10)
                     inc = max(inc, min(10, sev))
+                    if sev > 7:
+                        interaction_stats[user_id]["toxic"] += 1
         except:
             pass
     e["annoyance"] = min(100, e.get("annoyance", 0) + inc)
+    
     # Sentiment-based affection
     delta = 0
+    sentiment_result = "neutral"
     if HAVE_TRANSFORMERS and local_sentiment:
         try:
             s = local_sentiment(content)[0]
+            sentiment_result = s["label"].lower()
             delta = int((s["score"] * (1 if s["label"] == "POSITIVE" else -1)) * 5)
+            interaction_stats[user_id][sentiment_result] += 1
         except:
             pass
     else:
-        delta = sum(1 for w in ["miss you", "love"] if w in content.lower())
+        positive_terms = ["miss you", "love", "thanks", "good", "trust", "friend", "happy"]
+        negative_terms = ["hate", "stupid", "broken", "angry", "betrayed", "forget"]
+        delta = sum(1 for w in positive_terms if w in content.lower())
+        delta -= sum(1 for w in negative_terms if w in content.lower())
+        
+        if delta > 0:
+            sentiment_result = "positive"
+            interaction_stats[user_id]["positive"] += 1
+        elif delta < 0:
+            sentiment_result = "negative"
+            interaction_stats[user_id]["negative"] += 1
+        else:
+            interaction_stats[user_id]["neutral"] += 1
+    
+    # Apply trust factor to affection changes
     factor = 1 + (e.get("trust", 0) - e.get("resentment", 0)) / 20
     e["affection_points"] = max(-100, min(1000, e.get("affection_points", 0) + int(delta * factor)))
-    # Topic-based adjustments
+    
+    # Topic analysis and contextual triggers
     analysis = analyze_message_content(content, user_id)
+    
+    # Apply contextual emotional triggers
+    triggers = {
+        r"\b(betray(ed|s|ing)?|abandon(ed|s|ing)?)\b": {
+            "trust": -0.8, "resentment": +1.2, "affection_points": -15
+        },
+        r"\b(protect(ed|ing|s)?|save[ds]|help(ed|ing|s)?)\b": {
+            "protectiveness": +0.6, "attachment": +0.4, "affection_points": +8
+        },
+        r"\b(friend|ally|companion|partner)\b": {
+            "trust": +0.3, "attachment": +0.4, "affection_points": +10
+        },
+        r"\b(enemy|traitor|liar|dishonest)\b": {
+            "resentment": +0.6, "trust": -0.6, "affection_points": -12
+        },
+        r"\b(android|machine|YoRHa|bunker)\b": {
+            "attachment": +0.2, "resentment": +0.3
+        },
+        r"\b(2B|9S|Commander|Pods?)\b": {
+            "attachment": +0.3, "resentment": +0.2, "protectiveness": +0.3
+        },
+        r"\b(Emil|Resistance|Anemone|Jackass)\b": {
+            "trust": +0.2, "attachment": +0.1
+        },
+        r"\b(trust me|believe me)\b": {
+            "trust": +0.3 if e.get("trust", 0) > 6 else -0.2  # Trust these phrases only if already trusting
+        },
+    }
+    
+    for pattern, changes in triggers.items():
+        if re.search(pattern, content, re.I):
+            for stat, change in changes.items():
+                if stat == "affection_points":
+                    e[stat] = max(-100, min(1000, e.get(stat, 0) + change))
+                else:
+                    e[stat] = max(0, min(10, e.get(stat, 0) + change))
+            
+            # Record significant emotional changes as memories
+            if sum(abs(val) for val in changes.values() if isinstance(val, (int, float))) > 1.5:
+                matched_text = re.search(pattern, content, re.I).group(0)
+                await create_memory_event(
+                    user_id,
+                    "emotional_trigger",
+                    f"Triggered by '{matched_text}'. Emotional impact registered.",
+                    emotional_impact=changes
+                )
+    
+    # Topic-based adjustments from original function
     if "combat" in analysis["topics"] and e.get("trust", 0) > 3:
         e["trust"] = min(10, e.get("trust") + 0.2)
     if "memory" in analysis["topics"]:
@@ -211,36 +526,138 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
             e["annoyance"] = min(100, e.get("annoyance") + 7)
     if analysis["threat_level"] > 5 and e.get("attachment", 0) > 3:
         e["protectiveness"] = min(10, e.get("protectiveness") + 0.7)
-    # Milestones
-    if e["interaction_count"] in [10, 50, 100, 200, 500]:
-        e["attachment"] = min(10, e.get("attachment") + 0.3)
-        e["trust"] = min(10, e.get("trust") + 0.2)
+    
+    # Check for relationship milestones
+    if e["interaction_count"] in MILESTONE_THRESHOLDS:
+        milestone_type = f"interaction_{e['interaction_count']}"
+        milestone_msg = f"Interaction milestone reached: {e['interaction_count']} interactions"
+        e["attachment"] = min(10, e.get("attachment") + 0.5)
+        e["trust"] = min(10, e.get("trust") + 0.3)
+        
+        user_milestones[user_id].append({
+            "type": milestone_type,
+            "description": milestone_msg,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+        # Create a memory for this milestone
+        await create_memory_event(
+            user_id,
+            milestone_type,
+            milestone_msg,
+            {"attachment": +0.5, "trust": +0.3}
+        )
+    
+    # Check for relationship stage changes
+    old_stage = relationship_progress.get(user_id, {}).get("current_stage", None)
+    new_stage_data = get_relationship_stage(user_id)
+    
+    if (old_stage is not None and 
+        new_stage_data["current"]["name"] != old_stage["name"] and
+        RELATIONSHIP_LEVELS.index(new_stage_data["current"]) > RELATIONSHIP_LEVELS.index(old_stage)):
+        # Relationship has improved to a new stage
+        stage_msg = f"Relationship evolved to '{new_stage_data['current']['name']}' stage"
+        
+        user_milestones[user_id].append({
+            "type": "relationship_evolution",
+            "description": stage_msg,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+        # Create a memory for this evolution
+        await create_memory_event(
+            user_id,
+            "relationship_evolution",
+            stage_msg,
+            {"trust": +0.5, "attachment": +0.5, "affection_points": +15}
+        )
+    
+    # Update relationship progress tracking
+    relationship_progress[user_id] = {
+        "current_stage": new_stage_data["current"],
+        "score": new_stage_data["score"],
+        "last_updated": datetime.now(timezone.utc).isoformat()
+    }
+    
+    # Update last interaction timestamp
     e["last_interaction"] = datetime.now(timezone.utc).isoformat()
     await save_data()
 
 # ─── Generate Response ──────────────────────────────────────────────────────
 async def generate_a2_response(user_input: str, trust: float, user_id: int) -> str:
     await apply_enhanced_reaction_modifiers(user_input, user_id)
+    
+    # Get emotional state and modifiers
+    response_mods = calculate_response_modifiers(user_id)
     state = select_personality_state(user_id, user_input)
+    
+    # Override state if emotion modifiers suggest a different one
+    if response_mods["personality"] != "default":
+        state = response_mods["personality"]
+    
     cfg = PERSONALITY_STATES[state]
+    
+    # Adjust response length based on brevity modifier
+    adjusted_length = int(cfg['response_length'] / response_mods["brevity"])
+    
     prompt = cfg['description'] + f"\nSTATE: {state}\nTrust: {trust}/10\n"
+    
+    # Add mood description
+    mood = generate_mood_description(user_id)
+    prompt += f"Current mood: {mood}\n"
+    
+    # Add emotional modifiers
+    if response_mods["sarcasm"] > 1.5:
+        prompt += "Use increased sarcasm in your response.\n"
+    if response_mods["hostility"] > 1.5:
+        prompt += "Show more defensive or hostile tone.\n"
+    if response_mods["openness"] > 2.0:
+        prompt += "Be slightly more open or vulnerable than usual.\n"
+    
+    # Add standard modifiers
     mods = determine_mood_modifiers(user_id)
     for mtype, items in mods.items():
         if items:
             prompt += f"{mtype.replace('_',' ').capitalize()}: {', '.join(items)}\n"
+    
+    # Add relationship context
+    rel_data = get_relationship_stage(user_id)
+    prompt += f"Relationship: {rel_data['current']['name']}\n"
+    
+    # Add conversation history
     if conversation_summaries.get(user_id):
         prompt += f"History summary: {conversation_summaries[user_id]}\n"
+    
     prompt += f"User: {user_input}\nA2:"
+    
+    # Dynamically select model based on relationship depth
+    model = "gpt-4" if trust > 5 else "gpt-3.5-turbo"
+    
+    # Use lower temperature for critical or serious conversations
+    temp_adj = 0.0
+    if "?" in user_input and len(user_input) > 50:
+        temp_adj = -0.1  # More focused for serious questions
+    if user_emotions.get(user_id, {}).get('annoyance', 0) > 60:
+        temp_adj = 0.1   # More variable when annoyed
+    
     res = await asyncio.to_thread(
         lambda: client.chat.completions.create(
-            model="gpt-4" if trust > 5 else "gpt-3.5-turbo",
+            model=model,
             messages=[{"role":"system","content": prompt}],
-            temperature=cfg['temperature'],
-            max_tokens=cfg['response_length']
+            temperature=max(0.5, min(1.0, cfg['temperature'] + temp_adj)),
+            max_tokens=adjusted_length
         )
     )
-    reply = res.choices[0].message.content.strip()
-    recent_responses.setdefault(user_id, deque(maxlen=MAX_RECENT_RESPONSES)).append(reply)
+reply = res.choices[0].message.content.strip()
+    
+    # Track response for analysis
+    recent_responses.setdefault(user_id, deque(maxlen=MAX_RECENT_RESPONSES)).append({
+        "content": reply,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "state": state,
+        "mood": mood
+    })
+    
     return reply
 
 # ─── Contextual Greeting & First Message Handler ────────────────────────────
@@ -260,19 +677,82 @@ async def handle_first_message_of_day(message, user_id):
     if (datetime.now(timezone.utc) - last).total_seconds() > 8*3600:
         await message.channel.send(generate_contextual_greeting(user_id))
 
-# ─── Data Persistence ───────────────────────────────────────────────────────
+# ─── Enhanced Data Persistence ─────────────────────────────────────────────────
 async def load_user_profile(user_id):
-    path = PROFILES_DIR / f"{user_id}.json"
-    if path.exists():
+    """Load user profile data with enhanced stats"""
+    profile_path = PROFILES_DIR / f"{user_id}.json"
+    memory_path = PROFILES_DIR / f"{user_id}_memories.json"
+    events_path = PROFILES_DIR / f"{user_id}_events.json"
+    milestones_path = PROFILES_DIR / f"{user_id}_milestones.json"
+    
+    # Load main profile
+    if profile_path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(profile_path.read_text(encoding="utf-8"))
+            
+            # Extract relationship data if present
+            if "relationship" in data:
+                relationship_progress[user_id] = data.pop("relationship")
+            
+            # Extract interaction stats if present
+            if "interaction_stats" in data:
+                interaction_stats[user_id] = Counter(data.pop("interaction_stats"))
+            
+            return data
         except:
             return {}
+    
+    # Load memories
+    if memory_path.exists():
+        try:
+            user_memories[user_id] = json.loads(memory_path.read_text(encoding="utf-8"))
+        except:
+            user_memories[user_id] = []
+    
+    # Load events
+    if events_path.exists():
+        try:
+            user_events[user_id] = json.loads(events_path.read_text(encoding="utf-8"))
+        except:
+            user_events[user_id] = []
+    
+    # Load milestones
+    if milestones_path.exists():
+        try:
+            user_milestones[user_id] = json.loads(milestones_path.read_text(encoding="utf-8"))
+        except:
+            user_milestones[user_id] = []
+    
     return {}
 
 async def save_user_profile(user_id):
+    """Save user profile data with enhanced stats"""
     path = PROFILES_DIR / f"{user_id}.json"
-    path.write_text(json.dumps(user_emotions.get(user_id, {}), indent=2), encoding="utf-8")
+    
+    # Prepare data to save
+    data = user_emotions.get(user_id, {})
+    
+    # Add extra data
+    data["relationship"] = relationship_progress.get(user_id, {})
+    data["interaction_stats"] = dict(interaction_stats.get(user_id, Counter()))
+    
+    # Save to file
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    
+    # Save memories separately
+    if user_id in user_memories and user_memories[user_id]:
+        memory_path = PROFILES_DIR / f"{user_id}_memories.json"
+        memory_path.write_text(json.dumps(user_memories[user_id], indent=2), encoding="utf-8")
+    
+    # Save events separately
+    if user_id in user_events and user_events[user_id]:
+        events_path = PROFILES_DIR / f"{user_id}_events.json"
+        events_path.write_text(json.dumps(user_events[user_id], indent=2), encoding="utf-8")
+    
+    # Save milestones separately
+    if user_id in user_milestones and user_milestones[user_id]:
+        milestones_path = PROFILES_DIR / f"{user_id}_milestones.json"
+        milestones_path.write_text(json.dumps(user_milestones[user_id], indent=2), encoding="utf-8")
 
 async def load_dm_settings():
     global DM_ENABLED_USERS
@@ -284,14 +764,70 @@ async def save_dm_settings():
     DM_SETTINGS_FILE.write_text(json.dumps({"enabled_users": list(DM_ENABLED_USERS)}), encoding="utf-8")
 
 async def load_data():
-    global user_emotions
+    """Load all user data"""
+    global user_emotions, user_memories, user_events, user_milestones, interaction_stats, relationship_progress
+    
+    # Initialize containers
     user_emotions = {}
+    user_memories = defaultdict(list)
+    user_events = defaultdict(list)
+    user_milestones = defaultdict(list)
+    interaction_stats = defaultdict(Counter)
+    relationship_progress = defaultdict(dict)
+    
+    # Load profile data
     for file in PROFILES_DIR.glob("*.json"):
-        uid = int(file.stem)
-        user_emotions[uid] = await load_user_profile(uid)
+        if "_" not in file.stem:  # Skip special files like _memories.json
+            try:
+                uid = int(file.stem)
+                user_emotions[uid] = await load_user_profile(uid)
+            except:
+                pass
+    
+    # Load memories data
+    for file in PROFILES_DIR.glob("*_memories.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            user_memories[uid] = json.loads(file.read_text(encoding="utf-8"))
+        except:
+            pass
+    
+    # Load events data
+    for file in PROFILES_DIR.glob("*_events.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            user_events[uid] = json.loads(file.read_text(encoding="utf-8"))
+        except:
+            pass
+    
+    # Load milestones data
+    for file in PROFILES_DIR.glob("*_milestones.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            user_milestones[uid] = json.loads(file.read_text(encoding="utf-8"))
+        except:
+            pass
+    
+    # Load interaction stats data
+    for file in PROFILES_DIR.glob("*_interaction_stats.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            stats_data = json.loads(file.read_text(encoding="utf-8"))
+            interaction_stats[uid] = Counter(stats_data)
+        except:
+            pass
+    
+    # Add any missing fields to existing user data
+    for uid in user_emotions:
+        if "first_interaction" not in user_emotions[uid]:
+            user_emotions[uid]["first_interaction"] = user_emotions[uid].get("last_interaction", 
+                                                    datetime.now(timezone.utc).isoformat())
+    
+    # Load DM settings
     await load_dm_settings()
 
 async def save_data():
+    """Save all user data"""
     for uid in user_emotions:
         await save_user_profile(uid)
     await save_dm_settings()
@@ -316,6 +852,187 @@ bot = commands.Bot(command_prefix=commands.when_mentioned_or(*PREFIXES), intents
 
 # Initialize and start loops
 asyncio.get_event_loop().run_until_complete(load_data())
+
+# ─── Dynamic Stat Adjustment Task Loops ─────────────────────────────────────
+@tasks.loop(hours=1)
+async def dynamic_emotional_adjustments():
+    """Complex emotional decay and interactions between emotions"""
+    now = datetime.now(timezone.utc)
+    for uid, e in user_emotions.items():
+        # Get time since last interaction
+        last = datetime.fromisoformat(e.get('last_interaction', now.isoformat()))
+        hours_since = (now - last).total_seconds() / 3600
+        
+        # More complex decay formulas based on time elapsed
+        if hours_since > 12:  # Only decay after 12 hours of inactivity
+            # Each stat decays at its own rate
+            for stat, multiplier in EMOTION_DECAY_MULTIPLIERS.items():
+                if stat in e:
+                    # Higher values decay slower (more stable once established)
+                    decay_rate = 0.1 * multiplier * (1 - (e[stat] / 15))
+                    # Longer absence increases decay
+                    time_factor = min(1.0, hours_since / 72)  # Caps at 3 days
+                    total_decay = decay_rate * time_factor
+                    e[stat] = max(0, e[stat] - total_decay)
+        
+        # Different stats interact with each other
+        if e.get('resentment', 0) > 7 and e.get('trust', 0) > 3:
+            # High resentment slowly erodes trust
+            e['trust'] = max(0, e.get('trust', 0) - 0.05)
+        
+        if e.get('trust', 0) > 8 and e.get('resentment', 0) > 0:
+            # High trust slowly erodes resentment
+            e['resentment'] = max(0, e.get('resentment', 0) - 0.05)
+        
+        if e.get('trust', 0) > 7 and e.get('attachment', 0) < 5:
+            # High trust gradually increases attachment
+            e['attachment'] = min(10, e.get('attachment', 0) + 0.05)
+    
+    await save_data()
+
+@tasks.loop(hours=3)
+async def environmental_mood_effects():
+    """Time-based and environmental effects on mood"""
+    now = datetime.now(timezone.utc)
+    hour = now.hour
+    
+    # Time of day affects mood
+    if 2 <= hour < 5:  # Late night
+        mood_modifier = {"trust": -0.1, "resentment": +0.1}  # More guarded at night
+    elif 6 <= hour < 10:  # Morning
+        mood_modifier = {"trust": +0.1, "attachment": +0.1}  # Slightly more open in morning
+    elif 17 <= hour < 22:  # Evening
+        mood_modifier = {"attachment": +0.1}  # More relaxed in evening
+    else:
+        mood_modifier = {}
+    
+    # Apply to all users who have interacted recently (last 24h)
+    for uid, e in user_emotions.items():
+        last = datetime.fromisoformat(e.get('last_interaction', now.isoformat()))
+        if (now - last).total_seconds() < 86400:  # Within last 24h
+            for stat, change in mood_modifier.items():
+                e[stat] = max(0, min(10, e.get(stat, 0) + change))
+    
+    await save_data()
+
+@tasks.loop(hours=4)
+async def trigger_random_events():
+    """Trigger spontaneous random events for users"""
+    now = datetime.now(timezone.utc)
+    
+    # Define possible random events
+    RANDOM_EVENTS = [
+        {
+            "name": "system_glitch",
+            "condition": lambda e: True,  # Can happen to anyone
+            "chance": 0.05,  # 5% chance when triggered
+            "message": "System error detected. Running diagnostics... Trust parameters fluctuating.",
+            "effects": {"trust": -0.3, "affection_points": -5}
+        },
+        {
+            "name": "memory_resurface",
+            "condition": lambda e: e.get('interaction_count', 0) > 20,  # Only after 20+ interactions
+            "chance": 0.1,
+            "message": "... A memory fragment surfaced. You remind me of someone I once knew.",
+            "effects": {"attachment": +0.5, "trust": +0.2}
+        },
+        {
+            "name": "defensive_surge",
+            "condition": lambda e: e.get('annoyance', 0) > 50,  # Only when annoyed
+            "chance": 0.15,
+            "message": "Warning: Defense protocols activating. Stand back.",
+            "effects": {"protectiveness": -0.5, "resentment": +0.3}
+        },
+        {
+            "name": "trust_breakthrough",
+            "condition": lambda e: 4 <= e.get('trust', 0) <= 6,  # Middle trust range
+            "chance": 0.07,
+            "message": "... I'm beginning to think you might not be so bad after all.",
+            "effects": {"trust": +0.7, "attachment": +0.4}
+        },
+        {
+            "name": "vulnerability_moment",
+            "condition": lambda e: e.get('trust', 0) > 7,  # High trust
+            "chance": 0.12,
+            "message": "Sometimes I wonder... what happens when an android has no purpose left.",
+            "effects": {"attachment": +0.8, "affection_points": +15}
+        },
+        {
+            "name": "combat_memory",
+            "condition": lambda e: e.get('protectiveness', 0) > 5,  # Protective
+            "chance": 0.08,
+            "message": "Combat systems engaged... Oh. False alarm. Staying vigilant.",
+            "effects": {"protectiveness": +0.3}
+        },
+    ]
+    
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.bot or member.id not in user_emotions:
+                continue
+                
+            e = user_emotions[member.id]
+            
+            # Check last event time to respect cooldown
+            last_event_time = None
+            if member.id in user_events and user_events[member.id]:
+                last_event = sorted(user_events[member.id], 
+                                  key=lambda evt: datetime.fromisoformat(evt["timestamp"]),
+                                  reverse=True)[0]
+                last_event_time = datetime.fromisoformat(last_event["timestamp"])
+            
+            # Only proceed if outside cooldown period
+            if (last_event_time is None or 
+                (now - last_event_time).total_seconds() > EVENT_COOLDOWN_HOURS * 3600):
+                
+                # Roll for event chance based on relationship score
+                rel_score = get_relationship_score(member.id)
+                chance_modifier = 1.0 + (rel_score / 100)  # Higher relationship = more events
+                base_chance = RANDOM_EVENT_CHANCE * chance_modifier
+                
+                # Try to trigger an event
+                if random.random() < base_chance:
+                    # Filter eligible events
+                    eligible_events = [evt for evt in RANDOM_EVENTS if evt["condition"](e)]
+                    
+                    if eligible_events:
+                        # Pick a random event, weighted by chance
+                        weights = [evt["chance"] for evt in eligible_events]
+                        event = random.choices(eligible_events, weights=weights, k=1)[0]
+                        
+                        # Apply effects
+                        for stat, change in event['effects'].items():
+                            if stat == "affection_points":
+                                e[stat] = max(-100, min(1000, e.get(stat, 0) + change))
+                            else:
+                                e[stat] = max(0, min(10, e.get(stat, 0) + change))
+                        
+                        # Record the event
+                        event_record = {
+                            "type": event["name"],
+                            "message": event["message"],
+                            "timestamp": now.isoformat(),
+                            "effects": event["effects"]
+                        }
+                        user_events.setdefault(member.id, []).append(event_record)
+                        
+                        # Create a memory of this event
+                        await create_memory_event(
+                            member.id, 
+                            event["name"], 
+                            f"A2 experienced a {event['name'].replace('_', ' ')}. {event['message']}",
+                            event["effects"]
+                        )
+                        
+                        # Try to send a DM if allowed
+                        if member.id in DM_ENABLED_USERS:
+                            try:
+                                dm = await member.create_dm()
+                                await dm.send(f"A2: {event['message']}")
+                            except:
+                                pass
+    
+    await save_data()
 
 @tasks.loop(minutes=10)
 async def check_inactive_users():
@@ -356,41 +1073,624 @@ async def daily_affection_bonus():
 @bot.event
 async def on_ready():
     print("A2 is online.")
+    print(f"Connected to {len(bot.guilds)} guilds")
+    print(f"Serving {sum(len(g.members) for g in bot.guilds)} users")
+    
+    # Add first interaction timestamp for users who don't have it
+    now = datetime.now(timezone.utc).isoformat()
+    for uid in user_emotions:
+        if 'first_interaction' not in user_emotions[uid]:
+            user_emotions[uid]['first_interaction'] = user_emotions[uid].get('last_interaction', now)
+    
+    # Start background tasks
     check_inactive_users.start()
     decay_affection.start()
     decay_annoyance.start()
     daily_affection_bonus.start()
+    
+    # Start new dynamic tasks
+    dynamic_emotional_adjustments.start()
+    environmental_mood_effects.start()
+    trigger_random_events.start()
+    
+    print("All tasks started successfully.")
+    print("Dynamic stats system enabled")
 
 @bot.event
 async def on_message(message):
     if message.author.bot or message.content.startswith("A2:"):
         return
+    
     uid = message.author.id
     content = message.content.strip()
+    
+    # Initialize first interaction time if this is a new user
+    if uid not in user_emotions:
+        now = datetime.now(timezone.utc).isoformat()
+        user_emotions[uid] = {
+            "trust": 0, 
+            "resentment": 0, 
+            "attachment": 0, 
+            "protectiveness": 0,
+            "affection_points": 0, 
+            "annoyance": 0,
+            "first_interaction": now,
+            "last_interaction": now,
+            "interaction_count": 0
+        }
+    
     await handle_first_message_of_day(message, uid)
+    
     is_cmd = any(content.startswith(p) for p in PREFIXES)
     is_mention = bot.user in getattr(message, 'mentions', [])
     is_dm = isinstance(message.channel, discord.DMChannel)
+    
     if not (is_cmd or is_mention or is_dm):
         return
+    
     await bot.process_commands(message)
+    
     if is_cmd:
         return
+    
     trust = user_emotions.get(uid, {}).get('trust', 0)
     resp = await generate_a2_response(content, trust, uid)
+    
+    # Track user's emotional state in history
+    if uid in user_emotions:
+        e = user_emotions[uid]
+        # Initialize emotion history if it doesn't exist
+        if "emotion_history" not in e:
+            e["emotion_history"] = []
+        
+        # Only record history if enough time has passed since last entry
+        if not e["emotion_history"] or (
+            datetime.now(timezone.utc) - 
+            datetime.fromisoformat(e["emotion_history"][-1]["timestamp"])
+        ).total_seconds() > 3600:  # One hour between entries
+            e["emotion_history"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "trust": e.get("trust", 0),
+                "attachment": e.get("attachment", 0),
+                "resentment": e.get("resentment", 0),
+                "protectiveness": e.get("protectiveness", 0),
+                "affection_points": e.get("affection_points", 0)
+            })
+            
+            # Keep history at a reasonable size
+            if len(e["emotion_history"]) > 50:
+                e["emotion_history"] = e["emotion_history"][-50:]
+    
+    # Record interaction data for future analysis
+    await record_interaction_data(uid, content, resp)
+    
+    # Analyze user's message content length to adjust response style
+    if len(content) > 100:
+        # For longer messages, A2 might sometimes give a thoughtful response
+        if random.random() < 0.3 and trust > 5:
+            await message.channel.send(f"A2: ...")
+            await asyncio.sleep(1.5)
+    
     await message.channel.send(f"A2: {resp}")
+    
+    # Occasionally respond with a follow-up based on relationship
+    if random.random() < 0.1 and trust > 7:
+        await asyncio.sleep(3)
+        followups = [
+            "Something else?",
+            "...",
+            "Still processing that.",
+            "Interesting.",
+        ]
+        await message.channel.send(f"A2: {random.choice(followups)}")
 
 @bot.command(name="stats")
 async def stats(ctx):
+    """Display enhanced, dynamic relationship stats"""
     uid = ctx.author.id
     e = user_emotions.get(uid, {})
-    embed = discord.Embed(title="Your Emotion Stats", color=discord.Color.blue(), timestamp=datetime.now(timezone.utc))
-    for k in ["trust", "attachment", "protectiveness", "resentment"]:
-        embed.add_field(name=k.capitalize(), value=f"{e.get(k, 0)}/10", inline=True)
-    embed.add_field(name="Affection", value=str(e.get('affection_points', 0)), inline=True)
-    embed.add_field(name="Annoyance", value=str(e.get('annoyance', 0)), inline=True)
-    embed.set_footer(text="A2 Bot")
+    
+    # Calculate relationship score
+    rel_data = get_relationship_stage(uid)
+    
+    # Create a more visual and dynamic embed
+    embed = discord.Embed(
+        title=f"A2's Perception of {ctx.author.display_name}", 
+        description=f"Relationship Stage: **{rel_data['current']['name']}**",
+        color=discord.Color.from_hsv(min(0.99, max(0, rel_data['score']/100)), 0.8, 0.8)  # Color changes with score
+    )
+    
+    # Add description of current relationship
+    embed.add_field(
+        name="Status", 
+        value=rel_data['current']['description'],
+        inline=False
+    )
+    
+    # Show progress to next stage if not at max
+    if rel_data['next']:
+        progress_bar = "█" * int(rel_data['progress']/10) + "░" * (10 - int(rel_data['progress']/10))
+        embed.add_field(
+            name=f"Progress to {rel_data['next']['name']}", 
+            value=f"`{progress_bar}` {rel_data['progress']:.1f}%",
+            inline=False
+        )
+    
+    # Visual bars for stats using Discord emoji blocks
+    for stat_name, value, max_val, emoji in [
+        ("Trust", e.get('trust', 0), 10, "🔒"),
+        ("Attachment", e.get('attachment', 0), 10, "🔗"),
+        ("Protectiveness", e.get('protectiveness', 0), 10, "🛡️"),
+        ("Resentment", e.get('resentment', 0), 10, "⚔️"),
+        ("Affection", e.get('affection_points', 0), 1000, "💠"),
+        ("Annoyance", e.get('annoyance', 0), 100, "🔥")
+    ]:
+        # Normalize to 0-10 range for emoji bars
+        norm_val = value / max_val * 10 if max_val > 10 else value
+        bar = "█" * int(norm_val) + "░" * (10 - int(norm_val))
+        
+        if stat_name.lower() in ["trust", "attachment", "protectiveness", "resentment"]:
+            desc = f"{get_emotion_description(stat_name.lower(), value)}"
+        else:
+            desc = f"{value}/{max_val}"
+            
+        embed.add_field(name=f"{emoji} {stat_name}", value=f"`{bar}` {desc}", inline=False)
+    
+    # Add dynamic mood and state info
+    current_state = select_personality_state(uid, "")
+    embed.add_field(name="Current Mood", value=f"{current_state.capitalize()}", inline=True)
+    
+    # Add interaction stats
+    embed.add_field(name="Total Interactions", value=str(e.get('interaction_count', 0)), inline=True)
+    
+    # Add a contextual response
+    responses = [
+        "...",
+        "Don't read too much into this.",
+        "Numbers don't matter.",
+        "Still functioning.",
+        "Is this what you wanted to see?",
+        "Analyzing you too, human."
+    ]
+    
+    if rel_data['score'] > 60:
+        responses.extend([
+            "Your presence is... acceptable.",
+            "We've come a long way.",
+            "Trust doesn't come easily for me."
+        ])
+    
+    if e.get('annoyance', 0) > 60:
+        responses.extend([
+            "Don't push it.",
+            "You're testing my patience."
+        ])
+    
+    embed.set_footer(text=random.choice(responses))
+    
     await ctx.send(embed=embed)
+
+@bot.command(name="memories")
+async def memories(ctx):
+    """Show memories A2 has formed with this user"""
+    uid = ctx.author.id
+    if uid not in user_memories or not user_memories[uid]:
+        await ctx.send("A2: ... No significant memories stored.")
+        return
+    
+    embed = discord.Embed(title="A2's Memory Logs", color=discord.Color.purple())
+    
+    # Sort memories by timestamp (newest first)
+    sorted_memories = sorted(user_memories[uid], 
+                            key=lambda m: datetime.fromisoformat(m["timestamp"]), 
+                            reverse=True)
+    
+    # Display the 5 most recent memories
+    for i, memory in enumerate(sorted_memories[:5]):
+        timestamp = datetime.fromisoformat(memory["timestamp"])
+        embed.add_field(
+            name=f"Memory Log #{len(sorted_memories)-i}",
+            value=f"*{timestamp.strftime('%Y-%m-%d %H:%M')}*\n{memory['description']}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="milestones")
+async def show_milestones(ctx):
+    """Show relationship milestones achieved with this user"""
+    uid = ctx.author.id
+    if uid not in user_milestones or not user_milestones[uid]:
+        await ctx.send("A2: No notable milestones recorded yet.")
+        return
+    
+    embed = discord.Embed(title="Relationship Milestones", color=discord.Color.gold())
+    
+    # Sort milestones by timestamp
+    sorted_milestones = sorted(user_milestones[uid], 
+                              key=lambda m: datetime.fromisoformat(m["timestamp"]))
+    
+    for i, milestone in enumerate(sorted_milestones):
+        timestamp = datetime.fromisoformat(milestone["timestamp"])
+        embed.add_field(
+            name=f"Milestone #{i+1}",
+            value=f"*{timestamp.strftime('%Y-%m-%d')}*\n{milestone['description']}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="relationship")
+async def relationship(ctx):
+    """Show detailed relationship progression info"""
+    uid = ctx.author.id
+    rel_data = get_relationship_stage(uid)
+    e = user_emotions.get(uid, {})
+    
+    # Create graphical representation
+    embed = discord.Embed(
+        title=f"Relationship with {ctx.author.display_name}",
+        description=f"Overall Score: {rel_data['score']:.1f}/100",
+        color=discord.Color.dark_purple()
+    )
+    
+    # Create relationship progression bar
+    stages_bar = ""
+    for i, stage in enumerate(RELATIONSHIP_LEVELS):
+        if rel_data["current"] == stage:
+            stages_bar += "**[" + stage["name"] + "]** → "
+        elif i < RELATIONSHIP_LEVELS.index(rel_data["current"]):
+            stages_bar += stage["name"] + " → "
+        elif i == RELATIONSHIP_LEVELS.index(rel_data["current"]) +
+        elif i == RELATIONSHIP_LEVELS.index(rel_data["current"]) + 1:
+            stages_bar += stage["name"] + " → ..."
+            break
+        else:
+            continue
+    
+    embed.add_field(name="Progression", value=stages_bar, inline=False)
+    
+    # Show current relationship details
+    embed.add_field(
+        name="Current Stage", 
+        value=f"**{rel_data['current']['name']}**\n{rel_data['current']['description']}",
+        inline=False
+    )
+    
+    # Add interaction stats
+    stats = interaction_stats.get(uid, Counter())
+    total = stats.get("total", 0)
+    if total > 0:
+        positive = stats.get("positive", 0)
+        negative = stats.get("negative", 0)
+        neutral = stats.get("neutral", 0)
+        
+        stats_txt = f"Total interactions: {total}\n"
+        stats_txt += f"Positive: {positive} ({positive/total*100:.1f}%)\n"
+        stats_txt += f"Negative: {negative} ({negative/total*100:.1f}%)\n"
+        stats_txt += f"Neutral: {neutral} ({neutral/total*100:.1f}%)"
+        
+        embed.add_field(name="Interaction Analysis", value=stats_txt, inline=False)
+    
+    # Add key contributing factors
+    factors = []
+    if e.get('trust', 0) > 5:
+        factors.append(f"High trust (+{e.get('trust', 0):.1f})")
+    if e.get('attachment', 0) > 5:
+        factors.append(f"Strong attachment (+{e.get('attachment', 0):.1f})")
+    if e.get('resentment', 0) > 3:
+        factors.append(f"Lingering resentment (-{e.get('resentment', 0):.1f})")
+    if e.get('protectiveness', 0) > 5:
+        factors.append(f"Protective instincts (+{e.get('protectiveness', 0):.1f})")
+    if e.get('affection_points', 0) > 50:
+        factors.append(f"Positive affection (+{e.get('affection_points', 0)/100:.1f})")
+    elif e.get('affection_points', 0) < -20:
+        factors.append(f"Negative affection ({e.get('affection_points', 0)/100:.1f})")
+    
+    if factors:
+        embed.add_field(name="Key Factors", value="\n".join(factors), inline=False)
+    
+    # Add a personalized note based on relationship
+    if rel_data['score'] < 10:
+        note = "Systems registering high caution levels. Threat assessment ongoing."
+    elif rel_data['score'] < 25:
+        note = "Your presence is tolerable. For now."
+    elif rel_data['score'] < 50:
+        note = "You're... different from the others. Still evaluating."
+    elif rel_data['score'] < 75:
+        note = "I've grown somewhat accustomed to your presence."
+    else:
+        note = "There are few I've trusted this much. Don't make me regret it."
+    
+    embed.set_footer(text=note)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="history")
+async def show_history(ctx, days: int = 7):
+    """Show interaction history over time"""
+    uid = ctx.author.id
+    e = user_emotions.get(uid, {})
+    
+    if e.get('interaction_count', 0) < 5:
+        await ctx.send("A2: Not enough interaction data for analysis.")
+        return
+    
+    # Placeholder for future implementation of history visualization
+    embed = discord.Embed(
+        title=f"Interaction History with {ctx.author.display_name}",
+        description=f"Analyzing {days} days of interaction patterns.",
+        color=discord.Color.blue()
+    )
+    
+    # Add basic history stats
+    first_interaction = datetime.fromisoformat(e.get('first_interaction', e.get('last_interaction')))
+    last_interaction = datetime.fromisoformat(e.get('last_interaction'))
+    days_known = (datetime.now(timezone.utc) - first_interaction).days
+    
+    history_txt = f"First interaction: {first_interaction.strftime('%Y-%m-%d')}\n"
+    history_txt += f"Days since first contact: {days_known}\n"
+    history_txt += f"Total interactions: {e.get('interaction_count', 0)}\n"
+    history_txt += f"Average interactions per day: {e.get('interaction_count', 0) / max(1, days_known):.1f}"
+    
+    embed.add_field(name="Overview", value=history_txt, inline=False)
+    
+    # Recent activity section
+    embed.add_field(
+        name="Recent Activity",
+        value="Steady interaction patterns detected.",
+        inline=False
+    )
+    
+    # Note about more detailed stats in development
+    embed.set_footer(text="Detailed historical analysis in development.")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="events")
+async def show_events(ctx):
+    """Show recent random events"""
+    uid = ctx.author.id
+    if uid not in user_events or not user_events[uid]:
+        await ctx.send("A2: No notable events recorded.")
+        return
+    
+    embed = discord.Embed(title="Recent Events", color=discord.Color.dark_red())
+    
+    # Sort events by timestamp (newest first)
+    sorted_events = sorted(user_events[uid], 
+                          key=lambda e: datetime.fromisoformat(e["timestamp"]), 
+                          reverse=True)
+    
+    for i, event in enumerate(sorted_events[:5]):
+        timestamp = datetime.fromisoformat(event["timestamp"])
+        
+        # Format the effects for display
+        effects_txt = ""
+        for stat, value in event.get("effects", {}).items():
+            if value >= 0:
+                effects_txt += f"{stat}: +{value}\n"
+            else:
+                effects_txt += f"{stat}: {value}\n"
+        
+        embed.add_field(
+            name=f"Event {i+1}: {event['type'].replace('_', ' ').title()}",
+            value=f"*{timestamp.strftime('%Y-%m-%d %H:%M')}*\n"
+                  f"\"{event['message']}\"\n\n"
+                  f"{effects_txt if effects_txt else 'No measurable effects.'}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="analysis")
+async def detailed_analysis(ctx):
+    """Show detailed analysis of interaction patterns"""
+    uid = ctx.author.id
+    e = user_emotions.get(uid, {})
+    stats = interaction_stats.get(uid, Counter())
+    
+    if stats.get("total", 0) < 10:
+        await ctx.send("A2: Not enough interaction data for meaningful analysis.")
+        return
+    
+    embed = discord.Embed(
+        title=f"Interaction Analysis: {ctx.author.display_name}",
+        description="Detailed breakdown of communication patterns",
+        color=discord.Color.teal()
+    )
+    
+    # Calculate interaction patterns
+    total = stats.get("total", 0)
+    questions_pct = (stats.get("questions", 0) / total * 100) if total > 0 else 0
+    short_pct = (stats.get("short_messages", 0) / total * 100) if total > 0 else 0
+    long_pct = (stats.get("long_messages", 0) / total * 100) if total > 0 else 0
+    
+    patterns_txt = f"Questions: {questions_pct:.1f}% of messages\n"
+    patterns_txt += f"Short messages: {short_pct:.1f}%\n"
+    patterns_txt += f"Long messages: {long_pct:.1f}%\n"
+    
+    # Time patterns
+    morning_pct = (stats.get("morning", 0) / total * 100) if total > 0 else 0
+    afternoon_pct = (stats.get("afternoon", 0) / total * 100) if total > 0 else 0
+    evening_pct = (stats.get("evening", 0) / total * 100) if total > 0 else 0
+    night_pct = (stats.get("night", 0) / total * 100) if total > 0 else 0
+    
+    time_txt = f"Morning: {morning_pct:.1f}%\n"
+    time_txt += f"Afternoon: {afternoon_pct:.1f}%\n"
+    time_txt += f"Evening: {evening_pct:.1f}%\n"
+    time_txt += f"Night: {night_pct:.1f}%"
+    
+    embed.add_field(name="Message Patterns", value=patterns_txt, inline=True)
+    embed.add_field(name="Time Distribution", value=time_txt, inline=True)
+    
+    # Emotional response analysis
+    emotional_txt = f"Trust Change: {e.get('trust', 0):.1f}/10\n"
+    emotional_txt += f"Attachment: {e.get('attachment', 0):.1f}/10\n"
+    emotional_txt += f"Net Affection: {e.get('affection_points', 0)}\n"
+    
+    # Calculate emotional volatility 
+    if "emotion_history" in e and len(e["emotion_history"]) > 5:
+        history = e["emotion_history"]
+        trust_volatility = sum(abs(history[i+1]["trust"] - history[i]["trust"]) 
+                              for i in range(len(history)-1)) / (len(history)-1)
+        emotional_txt += f"Trust Volatility: {trust_volatility:.2f}/10"
+    
+    embed.add_field(name="Emotional Analysis", value=emotional_txt, inline=False)
+    
+    # Personal assessment
+    rel_score = get_relationship_score(uid)
+    if rel_score < 20:
+        assessment = "Interaction remains limited and guarded."
+    elif rel_score < 40:
+        assessment = "Communication patterns show increasing familiarity."
+    elif rel_score < 60:
+        assessment = "Significant rapport has developed over time."
+    elif rel_score < 80:
+        assessment = "Communication indicates strong mutual understanding."
+    else:
+        assessment = "Interaction patterns suggest exceptional compatibility."
+    
+    embed.add_field(name="Assessment", value=assessment, inline=False)
+    
+    # Add A2's current perspective
+    mood = generate_mood_description(uid)
+    embed.set_footer(text=f"Current Disposition: {mood}")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="trend")
+async def show_trends(ctx):
+    """Show relationship trend over time"""
+    uid = ctx.author.id
+    
+    if uid not in user_emotions or "emotion_history" not in user_emotions[uid]:
+        await ctx.send("A2: Insufficient historical data for trend analysis.")
+        return
+    
+    history = user_emotions[uid]["emotion_history"]
+    if len(history) < 3:
+        await ctx.send("A2: More interaction required for meaningful trend analysis.")
+        return
+    
+    embed = discord.Embed(
+        title=f"Relationship Trend with {ctx.author.display_name}",
+        description="Analysis of emotional patterns over time",
+        color=discord.Color.gold()
+    )
+    
+    # Calculate trends for key metrics
+    trust_trend = history[-1]["trust"] - history[0]["trust"]
+    attachment_trend = history[-1]["attachment"] - history[0]["attachment"]
+    resentment_trend = history[-1]["resentment"] - history[0]["resentment"]
+    
+    trends_txt = ""
+    if trust_trend > 1:
+        trends_txt += "📈 Trust has significantly increased\n"
+    elif trust_trend > 0.3:
+        trends_txt += "↗️ Trust has slightly increased\n"
+    elif trust_trend < -1:
+        trends_txt += "📉 Trust has significantly decreased\n"
+    elif trust_trend < -0.3:
+        trends_txt += "↘️ Trust has slightly decreased\n"
+    else:
+        trends_txt += "➡️ Trust has remained stable\n"
+    
+    if attachment_trend > 1:
+        trends_txt += "📈 Attachment has significantly increased\n"
+    elif attachment_trend > 0.3:
+        trends_txt += "↗️ Attachment has slightly increased\n"
+    elif attachment_trend < -1:
+        trends_txt += "📉 Attachment has significantly decreased\n"
+    elif attachment_trend < -0.3:
+        trends_txt += "↘️ Attachment has slightly decreased\n"
+    else:
+        trends_txt += "➡️ Attachment has remained stable\n"
+    
+    if resentment_trend > 1:
+        trends_txt += "📈 Resentment has significantly increased\n"
+    elif resentment_trend > 0.3:
+        trends_txt += "↗️ Resentment has slightly increased\n"
+    elif resentment_trend < -1:
+        trends_txt += "📉 Resentment has significantly decreased\n"
+    elif resentment_trend < -0.3:
+        trends_txt += "↘️ Resentment has slightly decreased\n"
+    else:
+        trends_txt += "➡️ Resentment has remained stable\n"
+    
+    embed.add_field(name="Key Trends", value=trends_txt, inline=False)
+    
+    # Overall relationship assessment
+    rel_score_now = get_relationship_score(uid)
+    
+    # Calculate historical relationship score
+    e_old = history[0].copy()
+    user_emotions[uid] = e_old  # Temporarily set to old values
+    rel_score_old = get_relationship_score(uid)
+    user_emotions[uid] = history[-1]  # Restore current values
+    
+    rel_change = rel_score_now - rel_score_old
+    
+    if rel_change > 15:
+        assessment = "Relationship has improved significantly."
+    elif rel_change > 5:
+        assessment = "Relationship has shown moderate improvement."
+    elif rel_change < -15:
+        assessment = "Relationship has deteriorated significantly."
+    elif rel_change < -5:
+        assessment = "Relationship has slightly deteriorated."
+    else:
+        assessment = "Relationship has remained relatively stable."
+    
+    embed.add_field(name="Overall Assessment", value=assessment, inline=False)
+    
+    # Add relevant contextual info
+    context_factors = []
+    if "significant_events" in user_emotions[uid]:
+        events = user_emotions[uid]["significant_events"]
+        if events:
+            last_event = events[-1]
+            context_factors.append(f"Last significant event: {last_event['description']}")
+    
+    if context_factors:
+        embed.add_field(name="Contextual Factors", value="\n".join(context_factors), inline=False)
+    
+    embed.set_footer(text="Analysis based on interaction patterns and emotional responses")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="reset")
+@commands.has_permissions(administrator=True)
+async def reset_stats(ctx, user_id: discord.Member = None):
+    """Admin command to reset a user's stats"""
+    target_id = user_id.id if user_id else ctx.author.id
+    
+    if target_id in user_emotions:
+        del user_emotions[target_id]
+    if target_id in user_memories:
+        del user_memories[target_id]
+    if target_id in user_events:
+        del user_events[target_id]
+    if target_id in user_milestones:
+        del user_milestones[target_id]
+    if target_id in interaction_stats:
+        del interaction_stats[target_id]
+    if target_id in relationship_progress:
+        del relationship_progress[target_id]
+    
+    # Also delete files
+    profile_path = PROFILES_DIR / f"{target_id}.json"
+    memory_path = PROFILES_DIR / f"{target_id}_memories.json"
+    events_path = PROFILES_DIR / f"{target_id}_events.json"
+    milestones_path = PROFILES_DIR / f"{target_id}_milestones.json"
+    stats_path = PROFILES_DIR / f"{target_id}_interaction_stats.json"
+    
+    for path in [profile_path, memory_path, events_path, milestones_path, stats_path]:
+        if path.exists():
+            path.unlink()
+    
+    await ctx.send(f"A2: Stats reset for user ID {target_id}.")
+    await save_data()
 
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
