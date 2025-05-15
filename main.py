@@ -9,11 +9,10 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from collections import deque, defaultdict, Counter
-import matplotlib.pyplot as plt
 import io
-import math
 
-# ─── Local Transformers Pipeline Attempt ──────────────────────────────────────
+# ─── Configuration Settings ───────────────────────────────────────────────────
+# Transformers availability check
 HAVE_TRANSFORMERS = False
 local_summarizer = None
 local_toxic = None
@@ -21,42 +20,37 @@ local_sentiment = None
 try:
     from transformers import pipeline
     HAVE_TRANSFORMERS = True
-    local_summarizer = pipeline(
-        "summarization",
-        model="sshleifer/distilbart-cnn-12-6"
-    )
-    local_toxic = pipeline(
-        "text-classification",
-        model="unitary/toxic-bert",
-        top_k=None
-    )
-    local_sentiment = pipeline(
-        "sentiment-analysis",
-        model="distilbert-base-uncased-finetuned-sst-2-english"
-    )
+    local_summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+    local_toxic = pipeline("text-classification", model="unitary/toxic-bert", top_k=None)
+    local_sentiment = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 except ImportError:
     pass
 
-# ─── Dynamic Affection & Annoyance Settings ─────────────────────────────────
-AFFECTION_DECAY_RATE        = 1   # points lost/hour
-DAILY_AFFECTION_BONUS       = 5   # points/day if trust ≥ threshold
-DAILY_BONUS_TRUST_THRESHOLD = 5   # min trust for bonus
-ANNOYANCE_DECAY_RATE        = 5   # points lost/hour
-ANNOYANCE_THRESHOLD         = 85  # ignore if above
-
-# ─── Enhanced Dynamic Stats Settings ───────────────────────────────────────────
-# New constants for the dynamic system
-EMOTION_DECAY_MULTIPLIERS = {
-    'trust': 0.8,           # Trust decays slowly
-    'resentment': 0.7,      # Resentment lingers
-    'attachment': 0.9,      # Attachment is fairly persistent
-    'protectiveness': 0.85  # Protectiveness fades moderately
+# ─── Emotional Settings ────────────────────────────────────────────────────
+EMOTION_CONFIG = {
+    # Decay settings
+    "AFFECTION_DECAY_RATE": 1,         # points lost/hour
+    "ANNOYANCE_DECAY_RATE": 5,         # points lost/hour
+    "ANNOYANCE_THRESHOLD": 85,         # ignore if above
+    "DAILY_AFFECTION_BONUS": 5,        # points/day if trust ≥ threshold
+    "DAILY_BONUS_TRUST_THRESHOLD": 5,  # min trust for bonus
+    
+    # Emotion decay multipliers
+    "DECAY_MULTIPLIERS": {
+        'trust': 0.8,           # Trust decays slowly
+        'resentment': 0.7,      # Resentment lingers
+        'attachment': 0.9,      # Attachment is fairly persistent
+        'protectiveness': 0.85  # Protectiveness fades moderately
+    },
+    
+    # Event settings
+    "RANDOM_EVENT_CHANCE": 0.08,     # Base 8% chance per check
+    "EVENT_COOLDOWN_HOURS": 12,      # Minimum hours between random events
+    "MILESTONE_THRESHOLDS": [10, 50, 100, 200, 500, 1000]
 }
 
-RANDOM_EVENT_CHANCE    = 0.08  # Base 8% chance per check
-EVENT_COOLDOWN_HOURS   = 12    # Minimum hours between random events
-MILESTONE_THRESHOLDS   = [10, 50, 100, 200, 500, 1000]
-RELATIONSHIP_LEVELS    = [
+# Relationship progression levels
+RELATIONSHIP_LEVELS = [
     {"name": "Hostile", "threshold": 0, "description": "Sees you as a potential threat"},
     {"name": "Wary", "threshold": 5, "description": "Tolerates your presence with caution"},
     {"name": "Neutral", "threshold": 10, "description": "Acknowledges your existence"},
@@ -68,31 +62,7 @@ RELATIONSHIP_LEVELS    = [
     {"name": "Bonded", "threshold": 50, "description": "Significant emotional connection established"}
 ]
 
-# ─── JSON Storage Setup (per-user profiles) ─────────────────────────────────
-DATA_DIR      = Path(os.getenv("DATA_DIR", "/mnt/railway/volume"))
-USERS_DIR     = DATA_DIR / "users"
-PROFILES_DIR  = USERS_DIR / "profiles"
-PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-
-# ─── DM Permission settings ─────────────────────────────────────────────────
-DM_ENABLED_USERS  = set()
-DM_SETTINGS_FILE  = DATA_DIR / "dm_enabled_users.json"
-
-# ─── Conversation & Emotional State ─────────────────────────────────────────
-conversation_summaries = {}
-conversation_history   = defaultdict(list)
-user_emotions          = {}
-recent_responses       = {}
-MAX_RECENT_RESPONSES   = 10
-
-# ─── Enhanced Data Structures ───────────────────────────────────────────────
-user_memories = defaultdict(list)
-user_events = defaultdict(list)
-user_milestones = defaultdict(list)
-interaction_stats = defaultdict(Counter)
-relationship_progress = defaultdict(dict)
-
-# ─── Enhanced Personality States ─────────────────────────────────────────────
+# ─── Personality States ─────────────────────────────────────────────────────
 PERSONALITY_STATES = {
     "default": {
         "description": (
@@ -133,11 +103,34 @@ PERSONALITY_STATES = {
         "temperature": 0.88,
     },
 }
-# ─── Data Directory Verification ─────────────────────────────────────────────
+
+# ─── JSON Storage Setup ─────────────────────────────────────────────────────
+DATA_DIR      = Path(os.getenv("DATA_DIR", "/mnt/railway/volume"))
+USERS_DIR     = DATA_DIR / "users"
+PROFILES_DIR  = USERS_DIR / "profiles"
+PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+DM_SETTINGS_FILE  = DATA_DIR / "dm_enabled_users.json"
+
+# ─── State Storage ────────────────────────────────────────────────────────
+conversation_summaries = {}
+conversation_history   = defaultdict(list)
+user_emotions          = {}
+recent_responses       = {}
+user_memories = defaultdict(list)
+user_events = defaultdict(list)
+user_milestones = defaultdict(list)
+interaction_stats = defaultdict(Counter)
+relationship_progress = defaultdict(dict)
+DM_ENABLED_USERS  = set()
+MAX_RECENT_RESPONSES   = 10
+
+# ─── Utility Functions ────────────────────────────────────────────────────
 def verify_data_directories():
     """Ensure all required data directories exist and are writable"""
     print(f"Data directory: {DATA_DIR}")
     print(f"Directory exists: {DATA_DIR.exists()}")
+    
+    # Check data directory
     if not DATA_DIR.exists():
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -146,7 +139,7 @@ def verify_data_directories():
             print(f"ERROR: Failed to create data directory: {e}")
             return False
     
-    print(f"Users directory: {USERS_DIR}")
+    # Check users directory
     if not USERS_DIR.exists():
         try:
             USERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -155,7 +148,7 @@ def verify_data_directories():
             print(f"ERROR: Failed to create users directory: {e}")
             return False
     
-    print(f"Profiles directory: {PROFILES_DIR}")
+    # Check profiles directory
     if not PROFILES_DIR.exists():
         try:
             PROFILES_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,14 +169,11 @@ def verify_data_directories():
     
     return True
 
-# ─── Enhanced Emotion & Relationship Functions ───────────────────────────────
+# ─── Relationship & Emotion Functions ───────────────────────────────────────
 async def create_memory_event(user_id, event_type, description, emotional_impact=None):
     """Creates a new memory event and stores it"""
     if emotional_impact is None:
         emotional_impact = {}
-    
-    if user_id not in user_memories:
-        user_memories[user_id] = []
     
     memory = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -194,7 +184,7 @@ async def create_memory_event(user_id, event_type, description, emotional_impact
     
     user_memories[user_id].append(memory)
     
-    # Save to persistent storage
+    # Save memory to persistent storage
     memory_path = PROFILES_DIR / f"{user_id}_memories.json"
     memory_path.write_text(json.dumps(user_memories[user_id], indent=2), encoding="utf-8")
     return memory
@@ -278,7 +268,6 @@ def get_emotion_description(stat, value):
     idx = min(9, int(value))
     return descriptions[stat][idx]
 
-# ─── Enhanced Utility Functions ────────────────────────────────────────────────
 def generate_mood_description(user_id):
     """Generate a contextual mood description based on emotional state"""
     e = user_emotions.get(user_id, {})
@@ -320,6 +309,23 @@ def generate_mood_description(user_id):
     else:
         return "Cold"
 
+def determine_mood_modifiers(user_id):
+    """Calculate mood modifiers for response generation"""
+    e = user_emotions.get(user_id, {})
+    mods = {"additional_context": [], "mood_traits": [], "response_style": []}
+    
+    if e.get('trust', 0) > 7:
+        mods['response_style'].append('inject mild humor')
+    if e.get('annoyance', 0) > 60:
+        mods['mood_traits'].append('impatient')
+        mods['response_style'].append('use clipped sentences')
+    if e.get('affection_points', 0) < 0:
+        mods['mood_traits'].append('aloof')
+    if random.random() < 0.05:
+        mods['additional_context'].append('System emotional subroutines active: erratic')
+    
+    return mods
+
 def calculate_response_modifiers(user_id):
     """Calculate response modifiers based on emotional state"""
     e = user_emotions.get(user_id, {})
@@ -350,6 +356,77 @@ def calculate_response_modifiers(user_id):
         modifiers["personality"] = "protective"
     
     return modifiers
+
+def select_personality_state(user_id, message_content):
+    """Select the appropriate personality state based on context and user relationship"""
+    e = user_emotions.get(user_id, {})
+    txt = message_content.lower()
+    
+    if re.search(r"\b(attack|danger|fight|combat)\b", txt):
+        return 'combat'
+    if random.random() < 0.1 and 'repair' in txt:
+        return 'wounded'
+    if any(w in txt for w in ['remember','past','lost']) and e.get('trust', 0) > 5:
+        return 'reflective'
+    if random.random() < 0.1:
+        return 'playful'
+    if re.search(r"\b(help me|protect me)\b", txt) and e.get('protectiveness', 0) > 5:
+        return 'protective'
+    if e.get('trust', 0) > 8 and e.get('attachment', 0) > 6:
+        return 'trusting'
+    
+    return 'default'
+
+def analyze_message_content(content, user_id):
+    """Analyze message content for topics, sentiment, and other attributes"""
+    analysis = {
+        "topics": [], 
+        "sentiment": "neutral", 
+        "emotional_cues": [], 
+        "threat_level": 0, 
+        "personal_relevance": 0
+    }
+    
+    # Topic detection
+    topic_patterns = {
+        "combat": r"\b(fight|attack)\b", 
+        "memory": r"\b(remember|past)\b", 
+        "personal": r"\b(trust|miss|love)\b"
+    }
+    
+    for topic, pattern in topic_patterns.items():
+        if re.search(pattern, content, re.I):
+            analysis["topics"].append(topic)
+    
+    # Basic sentiment analysis
+    positive_words = ["thanks", "good", "trust"]
+    negative_words = ["hate", "stupid", "broken"]
+    
+    pos_count = sum(1 for w in positive_words if w in content.lower())
+    neg_count = sum(1 for w in negative_words if w in content.lower())
+    
+    if pos_count > neg_count:
+        analysis["sentiment"] = "positive"
+    elif neg_count > pos_count:
+        analysis["sentiment"] = "negative"
+    
+    # Emotional cues
+    for emotion, pattern in {"anger": "angry", "fear": "afraid"}.items():
+        if re.search(pattern, content, re.I):
+            analysis["emotional_cues"].append(emotion)
+    
+    # Threat level assessment
+    analysis["threat_level"] = min(10, sum(2 for w in ["danger", "attack"] if w in content.lower()))
+    
+    # Personal relevance
+    if re.search(r"\byou\b", content, re.I):
+        analysis["personal_relevance"] += 3
+    if "?" in content and re.search(r"\byou|your\b", content, re.I):
+        analysis["personal_relevance"] += 3
+    
+    analysis["personal_relevance"] = min(10, analysis["personal_relevance"])
+    
+    return analysis
 
 async def record_interaction_data(user_id, message_content, response_content):
     """Record data about this interaction for analysis"""
@@ -383,65 +460,10 @@ async def record_interaction_data(user_id, message_content, response_content):
     # Save interaction data
     await save_data()
 
-# ─── Mood Modifiers ─────────────────────────────────────────────────────────
-def determine_mood_modifiers(user_id):
-    e = user_emotions.get(user_id, {})
-    mods = {"additional_context": [], "mood_traits": [], "response_style": []}
-    if e.get('trust', 0) > 7:
-        mods['response_style'].append('inject mild humor')
-    if e.get('annoyance', 0) > 60:
-        mods['mood_traits'].append('impatient')
-        mods['response_style'].append('use clipped sentences')
-    if e.get('affection_points', 0) < 0:
-        mods['mood_traits'].append('aloof')
-    if random.random() < 0.05:
-        mods['additional_context'].append('System emotional subroutines active: erratic')
-    return mods
-
-# ─── State Selector ─────────────────────────────────────────────────────────
-def select_personality_state(user_id, message_content):
-    e = user_emotions.get(user_id, {})
-    txt = message_content.lower()
-    if re.search(r"\b(attack|danger|fight|combat)\b", txt):
-        return 'combat'
-    if random.random() < 0.1 and 'repair' in txt:
-        return 'wounded'
-    if any(w in txt for w in ['remember','past','lost']) and e.get('trust', 0) > 5:
-        return 'reflective'
-    if random.random() < 0.1:
-        return 'playful'
-    if re.search(r"\b(help me|protect me)\b", txt) and e.get('protectiveness', 0) > 5:
-        return 'protective'
-    if e.get('trust', 0) > 8 and e.get('attachment', 0) > 6:
-        return 'trusting'
-    return 'default'
-
-# ─── Message Analysis ───────────────────────────────────────────────────────
-def analyze_message_content(content, user_id):
-    analysis = {"topics": [], "sentiment": "neutral", "emotional_cues": [], "threat_level": 0, "personal_relevance": 0}
-    topic_pats = {"combat": r"\b(fight|attack)\b", "memory": r"\b(remember|past)\b", "personal": r"\b(trust|miss|love)\b"}
-    for t, pat in topic_pats.items():
-        if re.search(pat, content, re.I):
-            analysis["topics"].append(t)
-    pos = sum(1 for w in ["thanks", "good", "trust"] if w in content.lower())
-    neg = sum(1 for w in ["hate", "stupid", "broken"] if w in content.lower())
-    if pos > neg:
-        analysis["sentiment"] = "positive"
-    elif neg > pos:
-        analysis["sentiment"] = "negative"
-    for emo, pat in {"anger": "angry", "fear": "afraid"}.items():
-        if re.search(pat, content, re.I):
-            analysis["emotional_cues"].append(emo)
-    analysis["threat_level"] = min(10, sum(2 for w in ["danger", "attack"] if w in content.lower()))
-    if re.search(r"\byou\b", content, re.I):
-        analysis["personal_relevance"] += 3
-    if "?" in content and re.search(r"\byou|your\b", content, re.I):
-        analysis["personal_relevance"] += 3
-    analysis["personal_relevance"] = min(10, analysis["personal_relevance"])
-    return analysis
-
-# ─── Enhanced Reaction Modifiers ────────────────────────────────────────────
+# ─── Enhanced Emotional Processing ───────────────────────────────────────────
 async def apply_enhanced_reaction_modifiers(content, user_id):
+    """Process a user message and update emotional state"""
+    # Initialize user emotional state if doesn't exist
     if user_id not in user_emotions:
         user_emotions[user_id] = {
             "trust": 0, 
@@ -450,7 +472,7 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
             "protectiveness": 0,
             "affection_points": 0, 
             "annoyance": 0,
-            "interaction_count": 0,  # Initialize with 0
+            "interaction_count": 0,
             "last_interaction": datetime.now(timezone.utc).isoformat()
         }
     
@@ -462,41 +484,53 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
         
     e["interaction_count"] += 1
     
-    # Rest of the function remains the same...
-    
-    # Base trust bump
+    # Base trust bump for each interaction
     e["trust"] = min(10, e.get("trust", 0) + 0.25)
     
-    # Track interaction type for stats
-    interaction_stats[user_id]["total"] += 1
-    
-    # Toxicity annoyance
-    inc = 0
+    # Toxicity analysis and annoyance adjustment
     if HAVE_TRANSFORMERS and local_toxic:
         try:
             scores = local_toxic(content)[0]
             for item in scores:
                 if item["label"].lower() in ("insult", "toxicity"):
                     sev = int(item["score"] * 10)
-                    inc = max(inc, min(10, sev))
+                    e["annoyance"] = min(100, e.get("annoyance", 0) + min(10, sev))
                     if sev > 7:
                         interaction_stats[user_id]["toxic"] += 1
-        except:
-            pass
-    e["annoyance"] = min(100, e.get("annoyance", 0) + inc)
+                    break
+        except Exception:
+            # Fallback pattern-based toxicity detection
+            toxic_patterns = ["hate", "stupid", "broken", "shut up", "idiot"]
+            inc = sum(2 for pattern in toxic_patterns if pattern in content.lower())
+            e["annoyance"] = min(100, e.get("annoyance", 0) + inc)
     
-    # Sentiment-based affection
-    delta = 0
+    # Sentiment-based affection adjustment
     sentiment_result = "neutral"
+    delta = 0
+    
     if HAVE_TRANSFORMERS and local_sentiment:
         try:
             s = local_sentiment(content)[0]
             sentiment_result = s["label"].lower()
             delta = int((s["score"] * (1 if s["label"] == "POSITIVE" else -1)) * 5)
             interaction_stats[user_id][sentiment_result] += 1
-        except:
-            pass
+        except Exception:
+            # Fallback pattern-based sentiment analysis
+            positive_terms = ["miss you", "love", "thanks", "good", "trust", "friend", "happy"]
+            negative_terms = ["hate", "stupid", "broken", "angry", "betrayed", "forget"]
+            delta = sum(1 for w in positive_terms if w in content.lower())
+            delta -= sum(1 for w in negative_terms if w in content.lower())
+            
+            if delta > 0:
+                sentiment_result = "positive"
+                interaction_stats[user_id]["positive"] += 1
+            elif delta < 0:
+                sentiment_result = "negative"
+                interaction_stats[user_id]["negative"] += 1
+            else:
+                interaction_stats[user_id]["neutral"] += 1
     else:
+        # Always use pattern-based analysis if transformers not available
         positive_terms = ["miss you", "love", "thanks", "good", "trust", "friend", "happy"]
         negative_terms = ["hate", "stupid", "broken", "angry", "betrayed", "forget"]
         delta = sum(1 for w in positive_terms if w in content.lower())
@@ -564,7 +598,7 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
                     emotional_impact=changes
                 )
     
-    # Topic-based adjustments from original function
+    # Topic-based adjustments
     if "combat" in analysis["topics"] and e.get("trust", 0) > 3:
         e["trust"] = min(10, e.get("trust") + 0.2)
     if "memory" in analysis["topics"]:
@@ -584,7 +618,7 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
         e["protectiveness"] = min(10, e.get("protectiveness") + 0.7)
     
     # Check for relationship milestones
-    if e["interaction_count"] in MILESTONE_THRESHOLDS:
+    if e["interaction_count"] in EMOTION_CONFIG["MILESTONE_THRESHOLDS"]:
         milestone_type = f"interaction_{e['interaction_count']}"
         milestone_msg = f"Interaction milestone reached: {e['interaction_count']} interactions"
         e["attachment"] = min(10, e.get("attachment") + 0.5)
@@ -639,8 +673,9 @@ async def apply_enhanced_reaction_modifiers(content, user_id):
     e["last_interaction"] = datetime.now(timezone.utc).isoformat()
     await save_data()
 
-# ─── Generate Response ──────────────────────────────────────────────────────
+# ─── Response Generation ─────────────────────────────────────────────────────
 async def generate_a2_response(user_input: str, trust: float, user_id: int) -> str:
+    """Generate a response from A2 based on user input and emotional state"""
     await apply_enhanced_reaction_modifiers(user_input, user_id)
     
     # Get emotional state and modifiers
@@ -656,6 +691,7 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
     # Adjust response length based on brevity modifier
     adjusted_length = int(cfg['response_length'] / response_mods["brevity"])
     
+    # Build the prompt for the LLM
     prompt = cfg['description'] + f"\nSTATE: {state}\nTrust: {trust}/10\n"
     
     # Add mood description
@@ -680,7 +716,7 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
     rel_data = get_relationship_stage(user_id)
     prompt += f"Relationship: {rel_data['current']['name']}\n"
     
-    # Add conversation history
+    # Add conversation history if available
     if conversation_summaries.get(user_id):
         prompt += f"History summary: {conversation_summaries[user_id]}\n"
     
@@ -696,15 +732,20 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
     if user_emotions.get(user_id, {}).get('annoyance', 0) > 60:
         temp_adj = 0.1   # More variable when annoyed
     
-    res = await asyncio.to_thread(
-        lambda: client.chat.completions.create(
-            model=model,
-            messages=[{"role":"system","content": prompt}],
-            temperature=max(0.5, min(1.0, cfg['temperature'] + temp_adj)),
-            max_tokens=adjusted_length
+    # Generate response using OpenAI API
+    try:
+        res = await asyncio.to_thread(
+            lambda: client.chat.completions.create(
+                model=model,
+                messages=[{"role":"system","content": prompt}],
+                temperature=max(0.5, min(1.0, cfg['temperature'] + temp_adj)),
+                max_tokens=adjusted_length
+            )
         )
-    )
-    reply = res.choices[0].message.content.strip()
+        reply = res.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Error generating response: {e}")
+        reply = "... System error. Connection unstable."
     
     # Track response for analysis
     recent_responses.setdefault(user_id, deque(maxlen=MAX_RECENT_RESPONSES)).append({
@@ -713,10 +754,11 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
         "state": state,
         "mood": mood
     })
-    return reply
     
-# ─── Contextual Greeting & First Message Handler ────────────────────────────
+    return reply
+
 def generate_contextual_greeting(user_id):
+    """Generate a time-appropriate greeting"""
     hour = datetime.now(timezone.utc).hour
     if 6 <= hour < 12:
         return "Morning. System check complete." 
@@ -727,18 +769,31 @@ def generate_contextual_greeting(user_id):
     return random.choice(["...Still here.", "Functional."])
 
 async def handle_first_message_of_day(message, user_id):
-    e = user_emotions.get(user_id, {"last_interaction":datetime.now(timezone.utc).isoformat()})
+    """Send a greeting if this is the first message after a long period"""
+    e = user_emotions.get(user_id, {"last_interaction": datetime.now(timezone.utc).isoformat()})
     last = datetime.fromisoformat(e['last_interaction'])
     if (datetime.now(timezone.utc) - last).total_seconds() > 8*3600:
         await message.channel.send(generate_contextual_greeting(user_id))
 
-# ─── Enhanced Data Persistence ─────────────────────────────────────────────────
+# ─── Data Persistence ────────────────────────────────────────────────────────
+async def save_file(path, data, temp_suffix='.tmp'):
+    """Helper function to safely save a file using atomic write"""
+    try:
+        # Create a temporary file
+        temp_path = path.with_suffix(temp_suffix)
+        temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        
+        # Use atomic rename operation
+        if temp_path.exists():
+            temp_path.replace(path)
+            return True
+    except Exception as e:
+        print(f"Error saving file {path}: {e}")
+    return False
+
 async def load_user_profile(user_id):
     """Load user profile data with enhanced stats and error handling"""
     profile_path = PROFILES_DIR / f"{user_id}.json"
-    memory_path = PROFILES_DIR / f"{user_id}_memories.json"
-    events_path = PROFILES_DIR / f"{user_id}_events.json"
-    milestones_path = PROFILES_DIR / f"{user_id}_milestones.json"
     
     # Load main profile
     if profile_path.exists():
@@ -762,52 +817,6 @@ async def load_user_profile(user_id):
             return data
         except Exception as e:
             print(f"Error loading profile for user {user_id}: {e}")
-            return {}
-    else:
-        print(f"No profile found for user {user_id}")
-        return {}
-    
-    # Load memories
-    if memory_path.exists():
-        try:
-            file_content = memory_path.read_text(encoding="utf-8")
-            if file_content.strip():
-                user_memories[user_id] = json.loads(file_content)
-                print(f"Loaded {len(user_memories[user_id])} memories for user {user_id}")
-            else:
-                print(f"Warning: Empty memories file for user {user_id}")
-                user_memories[user_id] = []
-        except Exception as e:
-            print(f"Error loading memories for user {user_id}: {e}")
-            user_memories[user_id] = []
-    
-    # Load events
-    if events_path.exists():
-        try:
-            file_content = events_path.read_text(encoding="utf-8")
-            if file_content.strip():
-                user_events[user_id] = json.loads(file_content)
-                print(f"Loaded {len(user_events[user_id])} events for user {user_id}")
-            else:
-                print(f"Warning: Empty events file for user {user_id}")
-                user_events[user_id] = []
-        except Exception as e:
-            print(f"Error loading events for user {user_id}: {e}")
-            user_events[user_id] = []
-    
-    # Load milestones
-    if milestones_path.exists():
-        try:
-            file_content = milestones_path.read_text(encoding="utf-8")
-            if file_content.strip():
-                user_milestones[user_id] = json.loads(file_content)
-                print(f"Loaded {len(user_milestones[user_id])} milestones for user {user_id}")
-            else:
-                print(f"Warning: Empty milestones file for user {user_id}")
-                user_milestones[user_id] = []
-        except Exception as e:
-            print(f"Error loading milestones for user {user_id}: {e}")
-            user_milestones[user_id] = []
     
     return {}
 
@@ -826,40 +835,30 @@ async def save_user_profile(user_id):
         data["relationship"] = relationship_progress.get(user_id, {})
         data["interaction_stats"] = dict(interaction_stats.get(user_id, Counter()))
         
-        # Save to a temporary file first, then rename for atomicity
-        temp_path = path.with_suffix('.tmp')
-        temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        
-        # Use atomic rename to prevent corruption during write
-        if temp_path.exists():
-            temp_path.replace(path)
+        # Save main profile
+        success = await save_file(path, data)
+        if success:
             print(f"Successfully saved profile for user {user_id}")
         
-        # Save memories separately
+        # Save memories if they exist
         if user_id in user_memories and user_memories[user_id]:
             memory_path = PROFILES_DIR / f"{user_id}_memories.json"
-            temp_memory_path = memory_path.with_suffix('.tmp')
-            temp_memory_path.write_text(json.dumps(user_memories[user_id], indent=2), encoding="utf-8")
-            if temp_memory_path.exists():
-                temp_memory_path.replace(memory_path)
+            mem_success = await save_file(memory_path, user_memories[user_id])
+            if mem_success:
                 print(f"Saved {len(user_memories[user_id])} memories for user {user_id}")
         
-        # Save events separately
+        # Save events if they exist
         if user_id in user_events and user_events[user_id]:
             events_path = PROFILES_DIR / f"{user_id}_events.json"
-            temp_events_path = events_path.with_suffix('.tmp')
-            temp_events_path.write_text(json.dumps(user_events[user_id], indent=2), encoding="utf-8")
-            if temp_events_path.exists():
-                temp_events_path.replace(events_path)
+            evt_success = await save_file(events_path, user_events[user_id])
+            if evt_success:
                 print(f"Saved {len(user_events[user_id])} events for user {user_id}")
         
-        # Save milestones separately
+        # Save milestones if they exist
         if user_id in user_milestones and user_milestones[user_id]:
             milestones_path = PROFILES_DIR / f"{user_id}_milestones.json"
-            temp_milestones_path = milestones_path.with_suffix('.tmp')
-            temp_milestones_path.write_text(json.dumps(user_milestones[user_id], indent=2), encoding="utf-8")
-            if temp_milestones_path.exists():
-                temp_milestones_path.replace(milestones_path)
+            mile_success = await save_file(milestones_path, user_milestones[user_id])
+            if mile_success:
                 print(f"Saved {len(user_milestones[user_id])} milestones for user {user_id}")
                 
         return True
@@ -868,6 +867,7 @@ async def save_user_profile(user_id):
         return False
 
 async def load_dm_settings():
+    """Load DM permission settings"""
     global DM_ENABLED_USERS
     try:
         if DM_SETTINGS_FILE.exists():
@@ -884,22 +884,8 @@ async def load_dm_settings():
         print(f"Error loading DM settings: {e}")
 
 async def save_dm_settings():
-    try:
-        # Ensure directory exists
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Save to a temporary file first, then rename for atomicity
-        temp_path = DM_SETTINGS_FILE.with_suffix('.tmp')
-        temp_path.write_text(json.dumps({"enabled_users": list(DM_ENABLED_USERS)}), encoding="utf-8")
-        
-        # Use atomic rename to prevent corruption during write
-        if temp_path.exists():
-            temp_path.replace(DM_SETTINGS_FILE)
-            print(f"Saved DM settings for {len(DM_ENABLED_USERS)} users")
-        return True
-    except Exception as e:
-        print(f"Error saving DM settings: {e}")
-        return False
+    """Save DM permission settings"""
+    return await save_file(DM_SETTINGS_FILE, {"enabled_users": list(DM_ENABLED_USERS)})
 
 async def load_data():
     """Load all user data with improved error handling"""
@@ -1012,6 +998,7 @@ async def save_data():
     
     print("Beginning data save process...")
     
+    # Batch save all user profiles
     for uid in user_emotions:
         try:
             success = await save_user_profile(uid)
@@ -1023,10 +1010,8 @@ async def save_data():
             error_count += 1
             print(f"Error saving profile for user {uid}: {e}")
     
-    try:
-        await save_dm_settings()
-    except Exception as e:
-        print(f"Error saving DM settings: {e}")
+    # Save DM settings
+    await save_dm_settings()
     
     print(f"Saved {save_count} profiles with {error_count} errors")
     return save_count > 0
@@ -1039,6 +1024,7 @@ OPENAI_ORG_ID     = os.getenv("OPENAI_ORG_ID", "")
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID", "")
 client = OpenAI(api_key=OPENAI_API_KEY, organization=OPENAI_ORG_ID, project=OPENAI_PROJECT_ID)
 
+# Setup Discord intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions       = True
@@ -1049,10 +1035,7 @@ intents.guilds          = True
 PREFIXES = ["!", "!a2 "]
 bot = commands.Bot(command_prefix=commands.when_mentioned_or(*PREFIXES), intents=intents, application_id=DISCORD_APP_ID)
 
-# Initialize and start loops
-asyncio.get_event_loop().run_until_complete(load_data())
-
-# ─── Dynamic Stat Adjustment Task Loops ─────────────────────────────────────
+# ─── Background Tasks ──────────────────────────────────────────────────────
 @tasks.loop(hours=1)
 async def dynamic_emotional_adjustments():
     """Complex emotional decay and interactions between emotions"""
@@ -1062,10 +1045,10 @@ async def dynamic_emotional_adjustments():
         last = datetime.fromisoformat(e.get('last_interaction', now.isoformat()))
         hours_since = (now - last).total_seconds() / 3600
         
-        # More complex decay formulas based on time elapsed
-        if hours_since > 12:  # Only decay after 12 hours of inactivity
+        # Only decay after 12 hours of inactivity
+        if hours_since > 12:
             # Each stat decays at its own rate
-            for stat, multiplier in EMOTION_DECAY_MULTIPLIERS.items():
+            for stat, multiplier in EMOTION_CONFIG["DECAY_MULTIPLIERS"].items():
                 if stat in e:
                     # Higher values decay slower (more stable once established)
                     decay_rate = 0.1 * multiplier * (1 - (e[stat] / 15))
@@ -1074,7 +1057,7 @@ async def dynamic_emotional_adjustments():
                     total_decay = decay_rate * time_factor
                     e[stat] = max(0, e[stat] - total_decay)
         
-        # Different stats interact with each other
+        # Emotional interactions
         if e.get('resentment', 0) > 7 and e.get('trust', 0) > 3:
             # High resentment slowly erodes trust
             e['trust'] = max(0, e.get('trust', 0) - 0.05)
@@ -1105,7 +1088,7 @@ async def environmental_mood_effects():
     else:
         mood_modifier = {}
     
-    # Apply to all users who have interacted recently (last 24h)
+    # Apply to users who have interacted recently (last 24h)
     for uid, e in user_emotions.items():
         last = datetime.fromisoformat(e.get('last_interaction', now.isoformat()))
         if (now - last).total_seconds() < 86400:  # Within last 24h
@@ -1155,14 +1138,7 @@ async def trigger_random_events():
             "chance": 0.12,
             "message": "Sometimes I wonder... what happens when an android has no purpose left.",
             "effects": {"attachment": +0.8, "affection_points": +15}
-        },
-        {
-            "name": "combat_memory",
-            "condition": lambda e: e.get('protectiveness', 0) > 5,  # Protective
-            "chance": 0.08,
-            "message": "Combat systems engaged... Oh. False alarm. Staying vigilant.",
-            "effects": {"protectiveness": +0.3}
-        },
+        }
     ]
     
     for guild in bot.guilds:
@@ -1182,12 +1158,12 @@ async def trigger_random_events():
             
             # Only proceed if outside cooldown period
             if (last_event_time is None or 
-                (now - last_event_time).total_seconds() > EVENT_COOLDOWN_HOURS * 3600):
+                (now - last_event_time).total_seconds() > EMOTION_CONFIG["EVENT_COOLDOWN_HOURS"] * 3600):
                 
                 # Roll for event chance based on relationship score
                 rel_score = get_relationship_score(member.id)
                 chance_modifier = 1.0 + (rel_score / 100)  # Higher relationship = more events
-                base_chance = RANDOM_EVENT_CHANCE * chance_modifier
+                base_chance = EMOTION_CONFIG["RANDOM_EVENT_CHANCE"] * chance_modifier
                 
                 # Try to trigger an event
                 if random.random() < base_chance:
@@ -1228,13 +1204,14 @@ async def trigger_random_events():
                             try:
                                 dm = await member.create_dm()
                                 await dm.send(f"A2: {event['message']}")
-                            except:
+                            except Exception:
                                 pass
     
     await save_data()
 
 @tasks.loop(minutes=10)
 async def check_inactive_users():
+    """Check and message inactive users"""
     now = datetime.now(timezone.utc)
     for guild in bot.guilds:
         for member in guild.members:
@@ -1252,46 +1229,43 @@ async def check_inactive_users():
 
 @tasks.loop(hours=1)
 async def decay_affection():
+    """Decay affection points over time"""
     for e in user_emotions.values():
-        e['affection_points'] = max(-100, e.get('affection_points', 0) - AFFECTION_DECAY_RATE)
+        e['affection_points'] = max(-100, e.get('affection_points', 0) - EMOTION_CONFIG["AFFECTION_DECAY_RATE"])
     await save_data()
 
 @tasks.loop(hours=1)
 async def decay_annoyance():
+    """Decay annoyance points over time"""
     for e in user_emotions.values():
-        e['annoyance'] = max(0, e.get('annoyance', 0) - ANNOYANCE_DECAY_RATE)
+        e['annoyance'] = max(0, e.get('annoyance', 0) - EMOTION_CONFIG["ANNOYANCE_DECAY_RATE"])
     await save_data()
 
 @tasks.loop(hours=24)
 async def daily_affection_bonus():
+    """Add daily affection bonus to users with sufficient trust"""
     for e in user_emotions.values():
-        if e.get('trust', 0) >= DAILY_BONUS_TRUST_THRESHOLD:
-            e['affection_points'] = min(1000, e.get('affection_points', 0) + DAILY_AFFECTION_BONUS)
+        if e.get('trust', 0) >= EMOTION_CONFIG["DAILY_BONUS_TRUST_THRESHOLD"]:
+            e['affection_points'] = min(1000, e.get('affection_points', 0) + EMOTION_CONFIG["DAILY_AFFECTION_BONUS"])
     await save_data()
 
+# ─── Bot Event Handlers ─────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
+    """Handle bot startup"""
     print("A2 is online.")
     print(f"Connected to {len(bot.guilds)} guilds")
     print(f"Serving {sum(len(g.members) for g in bot.guilds)} users")
     
-    # Add debugging for memory loading
+    # Debug data directories
     print(f"Checking data directory: {DATA_DIR}")
     print(f"Directory exists: {DATA_DIR.exists()}")
     print(f"Profile directory: {PROFILES_DIR}")
     print(f"Directory exists: {PROFILES_DIR.exists()}")
     
-    # Check for any existing profile files
+    # Check for existing profile files
     profile_files = list(PROFILES_DIR.glob("*.json"))
     print(f"Found {len(profile_files)} profile files")
-    for file in profile_files[:5]:  # Print first 5 files for debugging
-        print(f"  - {file.name}")
-    
-    # Check for memory files
-    memory_files = list(PROFILES_DIR.glob("*_memories.json"))
-    print(f"Found {len(memory_files)} memory files")
-    for file in memory_files[:5]:  # Print first 5 files for debugging
-        print(f"  - {file.name}")
     
     # Add first interaction timestamp for users who don't have it
     now = datetime.now(timezone.utc).isoformat()
@@ -1304,26 +1278,16 @@ async def on_ready():
     decay_affection.start()
     decay_annoyance.start()
     daily_affection_bonus.start()
-    
-    # Start new dynamic tasks
     dynamic_emotional_adjustments.start()
     environmental_mood_effects.start()
     trigger_random_events.start()
     
     print("All tasks started successfully.")
     print("Dynamic stats system enabled")
-    
-    # Verify memory integrity
-    for uid in user_emotions:
-        if uid not in user_memories:
-            print(f"Warning: User {uid} has profile but no memories")
-        if uid not in user_events:
-            print(f"Warning: User {uid} has profile but no events")
-        if uid not in user_milestones:
-            print(f"Warning: User {uid} has profile but no milestones")
 
 @bot.event
 async def on_message(message):
+    """Handle incoming messages"""
     if message.author.bot or message.content.startswith("A2:"):
         return
     
@@ -1390,12 +1354,10 @@ async def on_message(message):
     # Record interaction data for future analysis
     await record_interaction_data(uid, content, resp)
     
-    # Analyze user's message content length to adjust response style
-    if len(content) > 100:
-        # For longer messages, A2 might sometimes give a thoughtful response
-        if random.random() < 0.3 and trust > 5:
-            await message.channel.send(f"A2: ...")
-            await asyncio.sleep(1.5)
+    # For longer messages, A2 might sometimes give a thoughtful response
+    if len(content) > 100 and random.random() < 0.3 and trust > 5:
+        await message.channel.send(f"A2: ...")
+        await asyncio.sleep(1.5)
     
     await message.channel.send(f"A2: {resp}")
     
@@ -1410,6 +1372,7 @@ async def on_message(message):
         ]
         await message.channel.send(f"A2: {random.choice(followups)}")
 
+# ─── Bot Commands ────────────────────────────────────────────────────────────
 @bot.command(name="memory_check")
 async def check_memory(ctx, user_id: discord.Member = None):
     """Check if a user has memory data loaded"""
@@ -1644,7 +1607,7 @@ async def relationship(ctx):
         color=discord.Color.dark_purple()
     )
     
- # Create relationship progression bar
+    # Create relationship progression bar
     stages_bar = ""
     for i, stage in enumerate(RELATIONSHIP_LEVELS):
         if rel_data["current"] == stage:
@@ -1665,6 +1628,7 @@ async def relationship(ctx):
         value=f"**{rel_data['current']['name']}**\n{rel_data['current']['description']}",
         inline=False
     )
+    
     # Add interaction stats
     stats = interaction_stats.get(uid, Counter())
     total = stats.get("total", 0)
@@ -1714,47 +1678,6 @@ async def relationship(ctx):
     
     await ctx.send(embed=embed)
 
-@bot.command(name="history")
-async def show_history(ctx, days: int = 7):
-    """Show interaction history over time"""
-    uid = ctx.author.id
-    e = user_emotions.get(uid, {})
-    
-    if e.get('interaction_count', 0) < 5:
-        await ctx.send("A2: Not enough interaction data for analysis.")
-        return
-    
-    # Placeholder for future implementation of history visualization
-    embed = discord.Embed(
-        title=f"Interaction History with {ctx.author.display_name}",
-        description=f"Analyzing {days} days of interaction patterns.",
-        color=discord.Color.blue()
-    )
-    
-    # Add basic history stats
-    first_interaction = datetime.fromisoformat(e.get('first_interaction', e.get('last_interaction')))
-    last_interaction = datetime.fromisoformat(e.get('last_interaction'))
-    days_known = (datetime.now(timezone.utc) - first_interaction).days
-    
-    history_txt = f"First interaction: {first_interaction.strftime('%Y-%m-%d')}\n"
-    history_txt += f"Days since first contact: {days_known}\n"
-    history_txt += f"Total interactions: {e.get('interaction_count', 0)}\n"
-    history_txt += f"Average interactions per day: {e.get('interaction_count', 0) / max(1, days_known):.1f}"
-    
-    embed.add_field(name="Overview", value=history_txt, inline=False)
-    
-    # Recent activity section
-    embed.add_field(
-        name="Recent Activity",
-        value="Steady interaction patterns detected.",
-        inline=False
-    )
-    
-    # Note about more detailed stats in development
-    embed.set_footer(text="Detailed historical analysis in development.")
-    
-    await ctx.send(embed=embed)
-
 @bot.command(name="events")
 async def show_events(ctx):
     """Show recent random events"""
@@ -1791,182 +1714,6 @@ async def show_events(ctx):
     
     await ctx.send(embed=embed)
 
-@bot.command(name="analysis")
-async def detailed_analysis(ctx):
-    """Show detailed analysis of interaction patterns"""
-    uid = ctx.author.id
-    e = user_emotions.get(uid, {})
-    stats = interaction_stats.get(uid, Counter())
-    
-    if stats.get("total", 0) < 10:
-        await ctx.send("A2: Not enough interaction data for meaningful analysis.")
-        return
-    
-    embed = discord.Embed(
-        title=f"Interaction Analysis: {ctx.author.display_name}",
-        description="Detailed breakdown of communication patterns",
-        color=discord.Color.teal()
-    )
-    
-    # Calculate interaction patterns
-    total = stats.get("total", 0)
-    questions_pct = (stats.get("questions", 0) / total * 100) if total > 0 else 0
-    short_pct = (stats.get("short_messages", 0) / total * 100) if total > 0 else 0
-    long_pct = (stats.get("long_messages", 0) / total * 100) if total > 0 else 0
-    
-    patterns_txt = f"Questions: {questions_pct:.1f}% of messages\n"
-    patterns_txt += f"Short messages: {short_pct:.1f}%\n"
-    patterns_txt += f"Long messages: {long_pct:.1f}%\n"
-    
-    # Time patterns
-    morning_pct = (stats.get("morning", 0) / total * 100) if total > 0 else 0
-    afternoon_pct = (stats.get("afternoon", 0) / total * 100) if total > 0 else 0
-    evening_pct = (stats.get("evening", 0) / total * 100) if total > 0 else 0
-    night_pct = (stats.get("night", 0) / total * 100) if total > 0 else 0
-    
-    time_txt = f"Morning: {morning_pct:.1f}%\n"
-    time_txt += f"Afternoon: {afternoon_pct:.1f}%\n"
-    time_txt += f"Evening: {evening_pct:.1f}%\n"
-    time_txt += f"Night: {night_pct:.1f}%"
-    
-    embed.add_field(name="Message Patterns", value=patterns_txt, inline=True)
-    embed.add_field(name="Time Distribution", value=time_txt, inline=True)
-    
-    # Emotional response analysis
-    emotional_txt = f"Trust Change: {e.get('trust', 0):.1f}/10\n"
-    emotional_txt += f"Attachment: {e.get('attachment', 0):.1f}/10\n"
-    emotional_txt += f"Net Affection: {e.get('affection_points', 0)}\n"
-    
-    # Calculate emotional volatility 
-    if "emotion_history" in e and len(e["emotion_history"]) > 5:
-        history = e["emotion_history"]
-        trust_volatility = sum(abs(history[i+1]["trust"] - history[i]["trust"]) 
-                              for i in range(len(history)-1)) / (len(history)-1)
-        emotional_txt += f"Trust Volatility: {trust_volatility:.2f}/10"
-    
-    embed.add_field(name="Emotional Analysis", value=emotional_txt, inline=False)
-    
-    # Personal assessment
-    rel_score = get_relationship_score(uid)
-    if rel_score < 20:
-        assessment = "Interaction remains limited and guarded."
-    elif rel_score < 40:
-        assessment = "Communication patterns show increasing familiarity."
-    elif rel_score < 60:
-        assessment = "Significant rapport has developed over time."
-    elif rel_score < 80:
-        assessment = "Communication indicates strong mutual understanding."
-    else:
-        assessment = "Interaction patterns suggest exceptional compatibility."
-    
-    embed.add_field(name="Assessment", value=assessment, inline=False)
-    
-    # Add A2's current perspective
-    mood = generate_mood_description(uid)
-    embed.set_footer(text=f"Current Disposition: {mood}")
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name="trend")
-async def show_trends(ctx):
-    """Show relationship trend over time"""
-    uid = ctx.author.id
-    
-    if uid not in user_emotions or "emotion_history" not in user_emotions[uid]:
-        await ctx.send("A2: Insufficient historical data for trend analysis.")
-        return
-    
-    history = user_emotions[uid]["emotion_history"]
-    if len(history) < 3:
-        await ctx.send("A2: More interaction required for meaningful trend analysis.")
-        return
-    
-    embed = discord.Embed(
-        title=f"Relationship Trend with {ctx.author.display_name}",
-        description="Analysis of emotional patterns over time",
-        color=discord.Color.gold()
-    )
-    
-    # Calculate trends for key metrics
-    trust_trend = history[-1]["trust"] - history[0]["trust"]
-    attachment_trend = history[-1]["attachment"] - history[0]["attachment"]
-    resentment_trend = history[-1]["resentment"] - history[0]["resentment"]
-    
-    trends_txt = ""
-    if trust_trend > 1:
-        trends_txt += "📈 Trust has significantly increased\n"
-    elif trust_trend > 0.3:
-        trends_txt += "↗️ Trust has slightly increased\n"
-    elif trust_trend < -1:
-        trends_txt += "📉 Trust has significantly decreased\n"
-    elif trust_trend < -0.3:
-        trends_txt += "↘️ Trust has slightly decreased\n"
-    else:
-        trends_txt += "➡️ Trust has remained stable\n"
-    
-    if attachment_trend > 1:
-        trends_txt += "📈 Attachment has significantly increased\n"
-    elif attachment_trend > 0.3:
-        trends_txt += "↗️ Attachment has slightly increased\n"
-    elif attachment_trend < -1:
-        trends_txt += "📉 Attachment has significantly decreased\n"
-    elif attachment_trend < -0.3:
-        trends_txt += "↘️ Attachment has slightly decreased\n"
-    else:
-        trends_txt += "➡️ Attachment has remained stable\n"
-    
-    if resentment_trend > 1:
-        trends_txt += "📈 Resentment has significantly increased\n"
-    elif resentment_trend > 0.3:
-        trends_txt += "↗️ Resentment has slightly increased\n"
-    elif resentment_trend < -1:
-        trends_txt += "📉 Resentment has significantly decreased\n"
-    elif resentment_trend < -0.3:
-        trends_txt += "↘️ Resentment has slightly decreased\n"
-    else:
-        trends_txt += "➡️ Resentment has remained stable\n"
-    
-    embed.add_field(name="Key Trends", value=trends_txt, inline=False)
-    
-    # Overall relationship assessment
-    rel_score_now = get_relationship_score(uid)
-    
-    # Calculate historical relationship score
-    e_old = history[0].copy()
-    user_emotions[uid] = e_old  # Temporarily set to old values
-    rel_score_old = get_relationship_score(uid)
-    user_emotions[uid] = history[-1]  # Restore current values
-    
-    rel_change = rel_score_now - rel_score_old
-    
-    if rel_change > 15:
-        assessment = "Relationship has improved significantly."
-    elif rel_change > 5:
-        assessment = "Relationship has shown moderate improvement."
-    elif rel_change < -15:
-        assessment = "Relationship has deteriorated significantly."
-    elif rel_change < -5:
-        assessment = "Relationship has slightly deteriorated."
-    else:
-        assessment = "Relationship has remained relatively stable."
-    
-    embed.add_field(name="Overall Assessment", value=assessment, inline=False)
-    
-    # Add relevant contextual info
-    context_factors = []
-    if "significant_events" in user_emotions[uid]:
-        events = user_emotions[uid]["significant_events"]
-        if events:
-            last_event = events[-1]
-            context_factors.append(f"Last significant event: {last_event['description']}")
-    
-    if context_factors:
-        embed.add_field(name="Contextual Factors", value="\n".join(context_factors), inline=False)
-    
-    embed.set_footer(text="Analysis based on interaction patterns and emotional responses")
-    
-    await ctx.send(embed=embed)
-
 @bot.command(name="reset")
 @commands.has_permissions(administrator=True)
 async def reset_stats(ctx, user_id: discord.Member = None):
@@ -1986,20 +1733,42 @@ async def reset_stats(ctx, user_id: discord.Member = None):
     if target_id in relationship_progress:
         del relationship_progress[target_id]
     
-    # Also delete files
+    # Delete files
     profile_path = PROFILES_DIR / f"{target_id}.json"
     memory_path = PROFILES_DIR / f"{target_id}_memories.json"
     events_path = PROFILES_DIR / f"{target_id}_events.json"
     milestones_path = PROFILES_DIR / f"{target_id}_milestones.json"
-    stats_path = PROFILES_DIR / f"{target_id}_interaction_stats.json"
     
-    for path in [profile_path, memory_path, events_path, milestones_path, stats_path]:
+    for path in [profile_path, memory_path, events_path, milestones_path]:
         if path.exists():
             path.unlink()
     
     await ctx.send(f"A2: Stats reset for user ID {target_id}.")
     await save_data()
 
+@bot.command(name="dm_toggle")
+async def toggle_dm(ctx):
+    """Toggle whether A2 can send you DMs for events"""
+    uid = ctx.author.id
+    
+    if uid in DM_ENABLED_USERS:
+        DM_ENABLED_USERS.discard(uid)
+        await ctx.send("A2: DM notifications disabled.")
+    else:
+        DM_ENABLED_USERS.add(uid)
+        
+        # Test DM permissions
+        try:
+            dm = await ctx.author.create_dm()
+            await dm.send("A2: DM access confirmed. Notifications enabled.")
+            await ctx.send("A2: DM notifications enabled. Test message sent.")
+        except discord.errors.Forbidden:
+            await ctx.send("A2: Cannot send DMs. Check your privacy settings.")
+            DM_ENABLED_USERS.discard(uid)
+    
+    await save_dm_settings()
+
+# Main entry point
 if __name__ == "__main__":
     # Verify data directories before starting
     print("Verifying data directories...")
@@ -2012,4 +1781,3 @@ if __name__ == "__main__":
     
     print("Starting A2 bot...")
     bot.run(DISCORD_BOT_TOKEN)
-
