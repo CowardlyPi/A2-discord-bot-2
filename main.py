@@ -659,8 +659,6 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
     prompt = cfg['description'] + f"\nSTATE: {state}\nTrust: {trust}/10\n"
     
     # Add mood description
-    mood = generate
-    # Add mood description
     mood = generate_mood_description(user_id)
     prompt += f"Current mood: {mood}\n"
     
@@ -716,7 +714,7 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
         "mood": mood
     })
     return reply
-
+    
 # ─── Contextual Greeting & First Message Handler ────────────────────────────
 def generate_contextual_greeting(user_id):
     hour = datetime.now(timezone.utc).hour
