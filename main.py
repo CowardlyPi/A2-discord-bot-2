@@ -133,6 +133,48 @@ PERSONALITY_STATES = {
         "temperature": 0.88,
     },
 }
+# ─── Data Directory Verification ─────────────────────────────────────────────
+def verify_data_directories():
+    """Ensure all required data directories exist and are writable"""
+    print(f"Data directory: {DATA_DIR}")
+    print(f"Directory exists: {DATA_DIR.exists()}")
+    if not DATA_DIR.exists():
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"Created data directory: {DATA_DIR}")
+        except Exception as e:
+            print(f"ERROR: Failed to create data directory: {e}")
+            return False
+    
+    print(f"Users directory: {USERS_DIR}")
+    if not USERS_DIR.exists():
+        try:
+            USERS_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"Created users directory: {USERS_DIR}")
+        except Exception as e:
+            print(f"ERROR: Failed to create users directory: {e}")
+            return False
+    
+    print(f"Profiles directory: {PROFILES_DIR}")
+    if not PROFILES_DIR.exists():
+        try:
+            PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"Created profiles directory: {PROFILES_DIR}")
+        except Exception as e:
+            print(f"ERROR: Failed to create profiles directory: {e}")
+            return False
+    
+    # Check write access
+    try:
+        test_file = DATA_DIR / "write_test.tmp"
+        test_file.write_text("Test write access", encoding="utf-8")
+        test_file.unlink()  # Remove test file
+        print("Write access verified: SUCCESS")
+    except Exception as e:
+        print(f"ERROR: Failed to verify write access: {e}")
+        return False
+    
+    return True
 
 # ─── Enhanced Emotion & Relationship Functions ───────────────────────────────
 async def create_memory_event(user_id, event_type, description, emotional_impact=None):
@@ -617,6 +659,8 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
     prompt = cfg['description'] + f"\nSTATE: {state}\nTrust: {trust}/10\n"
     
     # Add mood description
+    mood = generate
+    # Add mood description
     mood = generate_mood_description(user_id)
     prompt += f"Current mood: {mood}\n"
     
@@ -692,7 +736,7 @@ async def handle_first_message_of_day(message, user_id):
 
 # ─── Enhanced Data Persistence ─────────────────────────────────────────────────
 async def load_user_profile(user_id):
-    """Load user profile data with enhanced stats"""
+    """Load user profile data with enhanced stats and error handling"""
     profile_path = PROFILES_DIR / f"{user_id}.json"
     memory_path = PROFILES_DIR / f"{user_id}_memories.json"
     events_path = PROFILES_DIR / f"{user_id}_events.json"
@@ -701,7 +745,13 @@ async def load_user_profile(user_id):
     # Load main profile
     if profile_path.exists():
         try:
-            data = json.loads(profile_path.read_text(encoding="utf-8"))
+            file_content = profile_path.read_text(encoding="utf-8")
+            if not file_content.strip():
+                print(f"Warning: Empty profile file for user {user_id}")
+                return {}
+                
+            data = json.loads(file_content)
+            print(f"Successfully loaded profile for user {user_id}")
             
             # Extract relationship data if present
             if "relationship" in data:
@@ -712,72 +762,149 @@ async def load_user_profile(user_id):
                 interaction_stats[user_id] = Counter(data.pop("interaction_stats"))
             
             return data
-        except:
+        except Exception as e:
+            print(f"Error loading profile for user {user_id}: {e}")
             return {}
+    else:
+        print(f"No profile found for user {user_id}")
+        return {}
     
     # Load memories
     if memory_path.exists():
         try:
-            user_memories[user_id] = json.loads(memory_path.read_text(encoding="utf-8"))
-        except:
+            file_content = memory_path.read_text(encoding="utf-8")
+            if file_content.strip():
+                user_memories[user_id] = json.loads(file_content)
+                print(f"Loaded {len(user_memories[user_id])} memories for user {user_id}")
+            else:
+                print(f"Warning: Empty memories file for user {user_id}")
+                user_memories[user_id] = []
+        except Exception as e:
+            print(f"Error loading memories for user {user_id}: {e}")
             user_memories[user_id] = []
     
     # Load events
     if events_path.exists():
         try:
-            user_events[user_id] = json.loads(events_path.read_text(encoding="utf-8"))
-        except:
+            file_content = events_path.read_text(encoding="utf-8")
+            if file_content.strip():
+                user_events[user_id] = json.loads(file_content)
+                print(f"Loaded {len(user_events[user_id])} events for user {user_id}")
+            else:
+                print(f"Warning: Empty events file for user {user_id}")
+                user_events[user_id] = []
+        except Exception as e:
+            print(f"Error loading events for user {user_id}: {e}")
             user_events[user_id] = []
     
     # Load milestones
     if milestones_path.exists():
         try:
-            user_milestones[user_id] = json.loads(milestones_path.read_text(encoding="utf-8"))
-        except:
+            file_content = milestones_path.read_text(encoding="utf-8")
+            if file_content.strip():
+                user_milestones[user_id] = json.loads(file_content)
+                print(f"Loaded {len(user_milestones[user_id])} milestones for user {user_id}")
+            else:
+                print(f"Warning: Empty milestones file for user {user_id}")
+                user_milestones[user_id] = []
+        except Exception as e:
+            print(f"Error loading milestones for user {user_id}: {e}")
             user_milestones[user_id] = []
     
     return {}
 
 async def save_user_profile(user_id):
-    """Save user profile data with enhanced stats"""
-    path = PROFILES_DIR / f"{user_id}.json"
-    
-    # Prepare data to save
-    data = user_emotions.get(user_id, {})
-    
-    # Add extra data
-    data["relationship"] = relationship_progress.get(user_id, {})
-    data["interaction_stats"] = dict(interaction_stats.get(user_id, Counter()))
-    
-    # Save to file
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    
-    # Save memories separately
-    if user_id in user_memories and user_memories[user_id]:
-        memory_path = PROFILES_DIR / f"{user_id}_memories.json"
-        memory_path.write_text(json.dumps(user_memories[user_id], indent=2), encoding="utf-8")
-    
-    # Save events separately
-    if user_id in user_events and user_events[user_id]:
-        events_path = PROFILES_DIR / f"{user_id}_events.json"
-        events_path.write_text(json.dumps(user_events[user_id], indent=2), encoding="utf-8")
-    
-    # Save milestones separately
-    if user_id in user_milestones and user_milestones[user_id]:
-        milestones_path = PROFILES_DIR / f"{user_id}_milestones.json"
-        milestones_path.write_text(json.dumps(user_milestones[user_id], indent=2), encoding="utf-8")
+    """Save user profile data with enhanced stats and error handling"""
+    try:
+        # Ensure directory exists
+        PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+        
+        path = PROFILES_DIR / f"{user_id}.json"
+        
+        # Prepare data to save
+        data = user_emotions.get(user_id, {})
+        
+        # Add extra data
+        data["relationship"] = relationship_progress.get(user_id, {})
+        data["interaction_stats"] = dict(interaction_stats.get(user_id, Counter()))
+        
+        # Save to a temporary file first, then rename for atomicity
+        temp_path = path.with_suffix('.tmp')
+        temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        
+        # Use atomic rename to prevent corruption during write
+        if temp_path.exists():
+            temp_path.replace(path)
+            print(f"Successfully saved profile for user {user_id}")
+        
+        # Save memories separately
+        if user_id in user_memories and user_memories[user_id]:
+            memory_path = PROFILES_DIR / f"{user_id}_memories.json"
+            temp_memory_path = memory_path.with_suffix('.tmp')
+            temp_memory_path.write_text(json.dumps(user_memories[user_id], indent=2), encoding="utf-8")
+            if temp_memory_path.exists():
+                temp_memory_path.replace(memory_path)
+                print(f"Saved {len(user_memories[user_id])} memories for user {user_id}")
+        
+        # Save events separately
+        if user_id in user_events and user_events[user_id]:
+            events_path = PROFILES_DIR / f"{user_id}_events.json"
+            temp_events_path = events_path.with_suffix('.tmp')
+            temp_events_path.write_text(json.dumps(user_events[user_id], indent=2), encoding="utf-8")
+            if temp_events_path.exists():
+                temp_events_path.replace(events_path)
+                print(f"Saved {len(user_events[user_id])} events for user {user_id}")
+        
+        # Save milestones separately
+        if user_id in user_milestones and user_milestones[user_id]:
+            milestones_path = PROFILES_DIR / f"{user_id}_milestones.json"
+            temp_milestones_path = milestones_path.with_suffix('.tmp')
+            temp_milestones_path.write_text(json.dumps(user_milestones[user_id], indent=2), encoding="utf-8")
+            if temp_milestones_path.exists():
+                temp_milestones_path.replace(milestones_path)
+                print(f"Saved {len(user_milestones[user_id])} milestones for user {user_id}")
+                
+        return True
+    except Exception as e:
+        print(f"Error saving data for user {user_id}: {e}")
+        return False
 
 async def load_dm_settings():
     global DM_ENABLED_USERS
-    if DM_SETTINGS_FILE.exists():
-        data = json.loads(DM_SETTINGS_FILE.read_text())
-        DM_ENABLED_USERS = set(data.get('enabled_users', []))
+    try:
+        if DM_SETTINGS_FILE.exists():
+            file_content = DM_SETTINGS_FILE.read_text(encoding="utf-8")
+            if file_content.strip():
+                data = json.loads(file_content)
+                DM_ENABLED_USERS = set(data.get('enabled_users', []))
+                print(f"Loaded DM settings for {len(DM_ENABLED_USERS)} users")
+            else:
+                print("Warning: Empty DM settings file")
+        else:
+            print("No DM settings file found")
+    except Exception as e:
+        print(f"Error loading DM settings: {e}")
 
 async def save_dm_settings():
-    DM_SETTINGS_FILE.write_text(json.dumps({"enabled_users": list(DM_ENABLED_USERS)}), encoding="utf-8")
+    try:
+        # Ensure directory exists
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Save to a temporary file first, then rename for atomicity
+        temp_path = DM_SETTINGS_FILE.with_suffix('.tmp')
+        temp_path.write_text(json.dumps({"enabled_users": list(DM_ENABLED_USERS)}), encoding="utf-8")
+        
+        # Use atomic rename to prevent corruption during write
+        if temp_path.exists():
+            temp_path.replace(DM_SETTINGS_FILE)
+            print(f"Saved DM settings for {len(DM_ENABLED_USERS)} users")
+        return True
+    except Exception as e:
+        print(f"Error saving DM settings: {e}")
+        return False
 
 async def load_data():
-    """Load all user data"""
+    """Load all user data with improved error handling"""
     global user_emotions, user_memories, user_events, user_milestones, interaction_stats, relationship_progress
     
     # Initialize containers
@@ -788,47 +915,80 @@ async def load_data():
     interaction_stats = defaultdict(Counter)
     relationship_progress = defaultdict(dict)
     
+    # Ensure directories exist
+    if not verify_data_directories():
+        print("ERROR: Data directories not available. Memory functions disabled.")
+        return False
+    
+    print("Beginning data load process...")
+    
     # Load profile data
+    profile_count = 0
+    error_count = 0
     for file in PROFILES_DIR.glob("*.json"):
         if "_" not in file.stem:  # Skip special files like _memories.json
             try:
                 uid = int(file.stem)
-                user_emotions[uid] = await load_user_profile(uid)
-            except:
-                pass
+                file_content = file.read_text(encoding="utf-8")
+                if not file_content.strip():
+                    print(f"Warning: Empty file {file}")
+                    continue
+                    
+                data = json.loads(file_content)
+                user_emotions[uid] = data
+                
+                # Extract relationship data if present
+                if "relationship" in data:
+                    relationship_progress[uid] = data.get("relationship", {})
+                
+                # Extract interaction stats if present
+                if "interaction_stats" in data:
+                    interaction_stats[uid] = Counter(data.get("interaction_stats", {}))
+                    
+                profile_count += 1
+            except Exception as e:
+                error_count += 1
+                print(f"Error loading profile {file}: {e}")
+    
+    print(f"Loaded {profile_count} profiles with {error_count} errors")
     
     # Load memories data
+    memory_count = 0
     for file in PROFILES_DIR.glob("*_memories.json"):
         try:
             uid = int(file.stem.split("_")[0])
-            user_memories[uid] = json.loads(file.read_text(encoding="utf-8"))
-        except:
-            pass
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                user_memories[uid] = json.loads(file_content)
+                memory_count += 1
+        except Exception as e:
+            print(f"Error loading memories {file}: {e}")
     
     # Load events data
+    events_count = 0
     for file in PROFILES_DIR.glob("*_events.json"):
         try:
             uid = int(file.stem.split("_")[0])
-            user_events[uid] = json.loads(file.read_text(encoding="utf-8"))
-        except:
-            pass
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                user_events[uid] = json.loads(file_content)
+                events_count += 1
+        except Exception as e:
+            print(f"Error loading events {file}: {e}")
     
     # Load milestones data
+    milestones_count = 0
     for file in PROFILES_DIR.glob("*_milestones.json"):
         try:
             uid = int(file.stem.split("_")[0])
-            user_milestones[uid] = json.loads(file.read_text(encoding="utf-8"))
-        except:
-            pass
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                user_milestones[uid] = json.loads(file_content)
+                milestones_count += 1
+        except Exception as e:
+            print(f"Error loading milestones {file}: {e}")
     
-    # Load interaction stats data
-    for file in PROFILES_DIR.glob("*_interaction_stats.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            stats_data = json.loads(file.read_text(encoding="utf-8"))
-            interaction_stats[uid] = Counter(stats_data)
-        except:
-            pass
+    print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
     
     # Add any missing fields to existing user data
     for uid in user_emotions:
@@ -838,12 +998,40 @@ async def load_data():
     
     # Load DM settings
     await load_dm_settings()
+    
+    print("Data load complete")
+    return profile_count > 0  # Return success indicator
 
 async def save_data():
-    """Save all user data"""
+    """Save all user data with improved error handling"""
+    save_count = 0
+    error_count = 0
+    
+    # Ensure directories exist
+    if not verify_data_directories():
+        print("ERROR: Data directories not available. Cannot save.")
+        return False
+    
+    print("Beginning data save process...")
+    
     for uid in user_emotions:
-        await save_user_profile(uid)
-    await save_dm_settings()
+        try:
+            success = await save_user_profile(uid)
+            if success:
+                save_count += 1
+            else:
+                error_count += 1
+        except Exception as e:
+            error_count += 1
+            print(f"Error saving profile for user {uid}: {e}")
+    
+    try:
+        await save_dm_settings()
+    except Exception as e:
+        print(f"Error saving DM settings: {e}")
+    
+    print(f"Saved {save_count} profiles with {error_count} errors")
+    return save_count > 0
 
 # ─── Bot Setup ──────────────────────────────────────────────────────────────
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
@@ -1089,6 +1277,24 @@ async def on_ready():
     print(f"Connected to {len(bot.guilds)} guilds")
     print(f"Serving {sum(len(g.members) for g in bot.guilds)} users")
     
+    # Add debugging for memory loading
+    print(f"Checking data directory: {DATA_DIR}")
+    print(f"Directory exists: {DATA_DIR.exists()}")
+    print(f"Profile directory: {PROFILES_DIR}")
+    print(f"Directory exists: {PROFILES_DIR.exists()}")
+    
+    # Check for any existing profile files
+    profile_files = list(PROFILES_DIR.glob("*.json"))
+    print(f"Found {len(profile_files)} profile files")
+    for file in profile_files[:5]:  # Print first 5 files for debugging
+        print(f"  - {file.name}")
+    
+    # Check for memory files
+    memory_files = list(PROFILES_DIR.glob("*_memories.json"))
+    print(f"Found {len(memory_files)} memory files")
+    for file in memory_files[:5]:  # Print first 5 files for debugging
+        print(f"  - {file.name}")
+    
     # Add first interaction timestamp for users who don't have it
     now = datetime.now(timezone.utc).isoformat()
     for uid in user_emotions:
@@ -1108,6 +1314,15 @@ async def on_ready():
     
     print("All tasks started successfully.")
     print("Dynamic stats system enabled")
+    
+    # Verify memory integrity
+    for uid in user_emotions:
+        if uid not in user_memories:
+            print(f"Warning: User {uid} has profile but no memories")
+        if uid not in user_events:
+            print(f"Warning: User {uid} has profile but no events")
+        if uid not in user_milestones:
+            print(f"Warning: User {uid} has profile but no milestones")
 
 @bot.event
 async def on_message(message):
@@ -1196,6 +1411,90 @@ async def on_message(message):
             "Interesting.",
         ]
         await message.channel.send(f"A2: {random.choice(followups)}")
+
+@bot.command(name="memory_check")
+async def check_memory(ctx, user_id: discord.Member = None):
+    """Check if a user has memory data loaded"""
+    target_id = user_id.id if user_id else ctx.author.id
+    
+    results = []
+    results.append(f"**Memory Check for User ID: {target_id}**")
+    results.append(f"Emotional data: **{'YES' if target_id in user_emotions else 'NO'}**")
+    results.append(f"Memories: **{'YES' if target_id in user_memories else 'NO'}**")
+    results.append(f"Events: **{'YES' if target_id in user_events else 'NO'}**")
+    results.append(f"Milestones: **{'YES' if target_id in user_milestones else 'NO'}**")
+    
+    # Check file existence
+    profile_path = PROFILES_DIR / f"{target_id}.json"
+    memory_path = PROFILES_DIR / f"{target_id}_memories.json"
+    events_path = PROFILES_DIR / f"{target_id}_events.json"
+    milestones_path = PROFILES_DIR / f"{target_id}_milestones.json"
+    
+    results.append(f"Profile file exists: **{'YES' if profile_path.exists() else 'NO'}**")
+    results.append(f"Memory file exists: **{'YES' if memory_path.exists() else 'NO'}**")
+    results.append(f"Events file exists: **{'YES' if events_path.exists() else 'NO'}**")
+    results.append(f"Milestones file exists: **{'YES' if milestones_path.exists() else 'NO'}**")
+    
+    # Check file sizes
+    if profile_path.exists():
+        results.append(f"Profile file size: **{profile_path.stat().st_size} bytes**")
+    if memory_path.exists():
+        results.append(f"Memory file size: **{memory_path.stat().st_size} bytes**")
+    
+    # Count memory items
+    memory_count = len(user_memories.get(target_id, []))
+    event_count = len(user_events.get(target_id, []))
+    milestone_count = len(user_milestones.get(target_id, []))
+    
+    results.append(f"Memory count: **{memory_count}**")
+    results.append(f"Event count: **{event_count}**")
+    results.append(f"Milestone count: **{milestone_count}**")
+    
+    await ctx.send("\n".join(results))
+
+@bot.command(name="force_save")
+@commands.has_permissions(administrator=True)
+async def force_save(ctx):
+    """Force save all memory data"""
+    await ctx.send("A2: Forcing save of all memory data...")
+    success = await save_data()
+    if success:
+        await ctx.send("A2: Memory save complete.")
+    else:
+        await ctx.send("A2: Error saving memory data.")
+
+@bot.command(name="force_load")
+@commands.has_permissions(administrator=True)
+async def force_load(ctx):
+    """Force reload all memory data"""
+    await ctx.send("A2: Forcing reload of all memory data...")
+    success = await load_data()
+    if success:
+        await ctx.send("A2: Memory reload complete.")
+    else:
+        await ctx.send("A2: Error reloading memory data.")
+
+@bot.command(name="create_test_memory")
+async def create_test_memory(ctx):
+    """Create a test memory to verify the memory system is working"""
+    uid = ctx.author.id
+    
+    # Create a test memory
+    memory = await create_memory_event(
+        uid,
+        "test_memory",
+        f"Test memory created on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}",
+        {"test": 1.0}
+    )
+    
+    # Force save
+    await save_data()
+    
+    # Verify memory was created
+    if uid in user_memories and any(m['type'] == 'test_memory' for m in user_memories[uid]):
+        await ctx.send("A2: Test memory created and saved successfully.")
+    else:
+        await ctx.send("A2: Failed to create test memory.")
 
 @bot.command(name="stats")
 async def stats(ctx):
@@ -1704,4 +2003,15 @@ async def reset_stats(ctx, user_id: discord.Member = None):
     await save_data()
 
 if __name__ == "__main__":
+    # Verify data directories before starting
+    print("Verifying data directories...")
+    if not verify_data_directories():
+        print("WARNING: Data directory issues detected. Memory functions may not work correctly.")
+    
+    # Load data before bot starts
+    print("Loading memory data...")
+    asyncio.get_event_loop().run_until_complete(load_data())
+    
+    print("Starting A2 bot...")
     bot.run(DISCORD_BOT_TOKEN)
+
