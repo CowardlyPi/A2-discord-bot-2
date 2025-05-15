@@ -648,7 +648,7 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
             max_tokens=adjusted_length
         )
     )
-reply = res.choices[0].message.content.strip()
+    reply = res.choices[0].message.content.strip()
     
     # Track response for analysis
     recent_responses.setdefault(user_id, deque(maxlen=MAX_RECENT_RESPONSES)).append({
