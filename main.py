@@ -649,13 +649,14 @@ async def generate_a2_response(user_input: str, trust: float, user_id: int) -> s
         )
     )
 reply = res.choices[0].message.content.strip()
+    
+    # Track response for analysis
     recent_responses.setdefault(user_id, deque(maxlen=MAX_RECENT_RESPONSES)).append({
         "content": reply,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "state": state,
         "mood": mood
     })
-    
     return reply
 
 # ─── Contextual Greeting & First Message Handler ────────────────────────────
