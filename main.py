@@ -8,7 +8,6 @@ import random
 import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-# Add these new imports
 import hashlib
 from collections import deque
 
@@ -49,10 +48,13 @@ USERS_DIR = DATA_DIR / "users"
 PROFILES_DIR = USERS_DIR / "profiles"
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
+# DM Permission settings - ADD THIS NEW SECTION HERE
+DM_ENABLED_USERS = set()  # Store user IDs who have enabled DMs
+DM_SETTINGS_FILE = DATA_DIR / "dm_enabled_users.json"
+
 conversation_summaries = {}
 conversation_history = {}
 user_emotions = {}
-# Add this for tracking recent responses
 recent_responses = {}
 MAX_RECENT_RESPONSES = 10  # How many recent responses to remember per user
 
@@ -70,16 +72,40 @@ async def save_user_profile(user_id: int):
     profile = user_emotions.get(user_id, {})
     path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
 
+# ADD THESE NEW FUNCTIONS HERE
+async def load_dm_settings():
+    global DM_ENABLED_USERS
+    if DM_SETTINGS_FILE.exists():
+        try:
+            data = json.loads(DM_SETTINGS_FILE.read_text(encoding="utf-8"))
+            DM_ENABLED_USERS = set(data.get("enabled_users", []))
+        except json.JSONDecodeError:
+            DM_ENABLED_USERS = set()
+    else:
+        DM_ENABLED_USERS = set()
+
+async def save_dm_settings():
+    data = {"enabled_users": list(DM_ENABLED_USERS)}
+    DM_SETTINGS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+# UPDATE THIS EXISTING FUNCTION
 async def load_data():
     global user_emotions
     user_emotions = {}
     for file in PROFILES_DIR.glob("*.json"):
         uid = int(file.stem)
         user_emotions[uid] = await load_user_profile(uid)
+    
+    # Also load DM settings
+    await load_dm_settings()
 
+# UPDATE THIS EXISTING FUNCTION
 async def save_data():
     for uid in list(user_emotions.keys()):
         await save_user_profile(uid)
+    
+    # Also save DM settings
+    await save_dm_settings()
 
 # ─── Configuration & State ───────────────────────────────────────────────────
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -115,7 +141,6 @@ reaction_modifiers = [
     (re.compile(r"\bi miss you\b", re.I),          {"attachment":1,"trust":1}),
     (re.compile(r"\bhate you\b", re.I),            {"resentment":3,"trust":-2}),
 ]
-# Replace with expanded arrays
 provoking_lines = [
     "Still mad? Good.", 
     "You again? Tch.", 
@@ -216,7 +241,6 @@ def summarize_history(user_id:int):
         except: pass
 
 # ─── A2 Response ─────────────────────────────────────────────────────────────
-# Replace the entire function with this new version
 def generate_a2_response_sync(user_input:str, trust:float, user_id:int)->str:
     summarize_history(user_id)
     model = "gpt-3.5-turbo" if trust < 5 else "gpt-4"
@@ -264,17 +288,31 @@ async def generate_a2_response(user_input:str,trust:float,user_id:int)->str:
     return await asyncio.to_thread(generate_a2_response_sync,user_input,trust,user_id)
 
 # ─── Tasks ───────────────────────────────────────────────────────────────────
+# REPLACE THIS TASK WITH THE UPDATED VERSION
 @tasks.loop(minutes=10)
 async def check_inactive_users():
-    now=datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
     for guild in bot.guilds:
         for member in guild.members:
-            if member.bot or member.id not in user_emotions: continue
-            last=datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
-            if now-last>timedelta(hours=6):
-                dm=await member.create_dm()
-                msg=random.choice(warm_lines if user_emotions[member.id]["trust"]>=7 else provoking_lines)
-                await dm.send(msg)
+            if member.bot or member.id not in user_emotions: 
+                continue
+                
+            # Skip if user hasn't enabled DMs
+            if member.id not in DM_ENABLED_USERS:
+                continue
+                
+            last = datetime.fromisoformat(user_emotions[member.id]["last_interaction"])
+            if now - last > timedelta(hours=6):
+                try:
+                    dm = await member.create_dm()
+                    msg = random.choice(warm_lines if user_emotions[member.id]["trust"] >= 7 else provoking_lines)
+                    await dm.send(msg)
+                except discord.errors.Forbidden:
+                    # Remove user from DM_ENABLED_USERS if they've blocked the bot
+                    DM_ENABLED_USERS.discard(member.id)
+                    await save_dm_settings()
+                except Exception as e:
+                    print(f"Error sending DM to {member.name}: {e}")
     asyncio.create_task(save_data())
 
 @tasks.loop(hours=1)
@@ -294,7 +332,7 @@ async def daily_affection_bonus():
     asyncio.create_task(save_data())
 
 # ─── Event Handlers ─────────────────────────────────────────────────────────
-# Replace with updated version
+# REPLACE THIS FUNCTION WITH THE UPDATED VERSION
 @bot.event
 async def on_ready():
     print("A2 is online.")
@@ -303,6 +341,9 @@ async def on_ready():
     decay_affection.start()
     decay_annoyance.start()
     daily_affection_bonus.start()
+    
+    # Load DM settings
+    await load_dm_settings()
     
     # Initialize recent_responses for each user
     global recent_responses
@@ -378,7 +419,6 @@ async def view_emotions(ctx,member:discord.Member=None):
     if uid not in user_emotions:return await ctx.send(f"A2: No data for {target.mention}.")
     await ctx.send(f"Emotion data for {target.mention}: {json.dumps(user_emotions[uid],indent=2)}")
 
-# Add new command for clearing response history
 @bot.command(name="clear_responses", help="Clear the bot's memory of previous responses")
 async def clear_responses(ctx, member: discord.Member = None):
     target = member or ctx.author
@@ -388,6 +428,24 @@ async def clear_responses(ctx, member: discord.Member = None):
         await ctx.send(f"A2: Memory banks cleared for {target.mention}.")
     else:
         await ctx.send(f"A2: No stored responses for {target.mention}.")
+
+# ADD THESE NEW COMMANDS
+@bot.command(name="enable_dm", aliases=["dms_on"], help="Enable A2 to send you direct messages")
+async def enable_dm(ctx):
+    DM_ENABLED_USERS.add(ctx.author.id)
+    await save_dm_settings()
+    await ctx.send("A2: DMs enabled. I can contact you directly now.")
+    
+@bot.command(name="disable_dm", aliases=["dms_off"], help="Disable A2 from sending you direct messages")
+async def disable_dm(ctx):
+    DM_ENABLED_USERS.discard(ctx.author.id)
+    await save_dm_settings()
+    await ctx.send("A2: DMs disabled. I won't bother you anymore.")
+    
+@bot.command(name="dm_status", help="Check if you have DMs enabled or disabled")
+async def dm_status(ctx):
+    status = "enabled" if ctx.author.id in DM_ENABLED_USERS else "disabled"
+    await ctx.send(f"A2: Your DMs are currently {status}.")
 
 if __name__=="__main__":
     bot.run(DISCORD_BOT_TOKEN)
