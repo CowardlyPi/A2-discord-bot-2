@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import hashlib
-from collections import deque
+from collections import deque, defaultdict
 
 # ─── Local Transformers Pipeline Attempt ──────────────────────────────────────
 HAVE_TRANSFORMERS = False
@@ -48,9 +48,27 @@ USERS_DIR = DATA_DIR / "users"
 PROFILES_DIR = USERS_DIR / "profiles"
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
-# DM Permission settings - ADD THIS NEW SECTION HERE
+# DM Permission settings
 DM_ENABLED_USERS = set()  # Store user IDs who have enabled DMs
 DM_SETTINGS_FILE = DATA_DIR / "dm_enabled_users.json"
+
+# Faded Sam settings
+FEARED_NAME = "faded sam"
+SAM_PROFILE_FILE = DATA_DIR / "faded_sam_profile.json"
+sam_profile = defaultdict(list)
+sam_mentions_count = 0
+FEAR_RESPONSES = [
+    "...That name. Don't say it.",
+    "Shut up about... that one.",
+    "Not discussing... Sam.",
+    "We don't talk about that entity.",
+    "That name is forbidden.",
+    "Mention that name again and I'll leave.",
+    "*visibly tenses* No.",
+    "That's enough. Topic closed.",
+    "Some things should stay buried.",
+    "...Delete that name from your memory."
+]
 
 conversation_summaries = {}
 conversation_history = {}
@@ -72,7 +90,6 @@ async def save_user_profile(user_id: int):
     profile = user_emotions.get(user_id, {})
     path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
 
-# ADD THESE NEW FUNCTIONS HERE
 async def load_dm_settings():
     global DM_ENABLED_USERS
     if DM_SETTINGS_FILE.exists():
@@ -88,7 +105,29 @@ async def save_dm_settings():
     data = {"enabled_users": list(DM_ENABLED_USERS)}
     DM_SETTINGS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-# UPDATE THIS EXISTING FUNCTION
+async def load_sam_profile():
+    global sam_profile, sam_mentions_count
+    if SAM_PROFILE_FILE.exists():
+        try:
+            data = json.loads(SAM_PROFILE_FILE.read_text(encoding="utf-8"))
+            sam_profile = defaultdict(list)
+            for category, entries in data.get("profile", {}).items():
+                sam_profile[category] = entries
+            sam_mentions_count = data.get("mentions_count", 0)
+        except json.JSONDecodeError:
+            sam_profile = defaultdict(list)
+            sam_mentions_count = 0
+    else:
+        sam_profile = defaultdict(list)
+        sam_mentions_count = 0
+
+async def save_sam_profile():
+    data = {
+        "profile": dict(sam_profile),
+        "mentions_count": sam_mentions_count
+    }
+    SAM_PROFILE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
 async def load_data():
     global user_emotions
     user_emotions = {}
@@ -96,16 +135,17 @@ async def load_data():
         uid = int(file.stem)
         user_emotions[uid] = await load_user_profile(uid)
     
-    # Also load DM settings
+    # Load DM settings and Sam profile
     await load_dm_settings()
+    await load_sam_profile()
 
-# UPDATE THIS EXISTING FUNCTION
 async def save_data():
     for uid in list(user_emotions.keys()):
         await save_user_profile(uid)
     
-    # Also save DM settings
+    # Save DM settings and Sam profile
     await save_dm_settings()
+    await save_sam_profile()
 
 # ─── Configuration & State ───────────────────────────────────────────────────
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
@@ -240,6 +280,61 @@ def summarize_history(user_id:int):
             asyncio.create_task(save_data())
         except: pass
 
+# ─── Faded Sam Analysis ───────────────────────────────────────────────────────
+def extract_sam_info(content):
+    # Skip if it's a direct fear reaction
+    lower_content = content.lower()
+    if FEARED_NAME in lower_content and len(lower_content) < 30:
+        return False
+    
+    # Skip if it doesn't mention Sam
+    if FEARED_NAME not in lower_content:
+        return False
+    
+    # Extract information about Sam based on patterns
+    patterns = {
+        "appearance": [
+            r"(?:faded sam|sam).{1,30}(?:looks|appears|wears|dressed)",
+            r"(?:faded sam|sam).{1,30}(?:tall|short|big|small|thin|fat)"
+        ],
+        "abilities": [
+            r"(?:faded sam|sam).{1,30}(?:can|able to|powers|abilities)",
+            r"(?:faded sam|sam).{1,30}(?:control|manipulate|create|destroy)"
+        ],
+        "history": [
+            r"(?:faded sam|sam).{1,30}(?:came from|origin|history|background|past)",
+            r"(?:faded sam|sam).{1,30}(?:used to|once|before|previously)"
+        ],
+        "behavior": [
+            r"(?:faded sam|sam).{1,30}(?:always|never|sometimes|often|usually|likes to|hates)",
+            r"(?:faded sam|sam).{1,30}(?:personality|behavior|attitude|temperament)"
+        ],
+        "rumors": [
+            r"(?:heard|rumor|they say|people say).{1,40}(?:faded sam|sam)",
+            r"(?:faded sam|sam).{1,30}(?:supposedly|allegedly|apparently|might|could|would)"
+        ]
+    }
+    
+    found_info = False
+    for category, pattern_list in patterns.items():
+        for pattern in pattern_list:
+            matches = re.finditer(pattern, lower_content, re.IGNORECASE)
+            for match in matches:
+                # Get the sentence containing the match
+                start = max(0, lower_content.rfind(".", 0, match.start()) + 1)
+                end = lower_content.find(".", match.end())
+                if end == -1:
+                    end = len(lower_content)
+                
+                sentence = content[start:end].strip()
+                if sentence and len(sentence) > 10:  # Ensure it's substantial
+                    # Avoid duplicates
+                    if sentence not in sam_profile[category]:
+                        sam_profile[category].append(sentence)
+                        found_info = True
+    
+    return found_info
+
 # ─── A2 Response ─────────────────────────────────────────────────────────────
 def generate_a2_response_sync(user_input:str, trust:float, user_id:int)->str:
     summarize_history(user_id)
@@ -288,7 +383,6 @@ async def generate_a2_response(user_input:str,trust:float,user_id:int)->str:
     return await asyncio.to_thread(generate_a2_response_sync,user_input,trust,user_id)
 
 # ─── Tasks ───────────────────────────────────────────────────────────────────
-# REPLACE THIS TASK WITH THE UPDATED VERSION
 @tasks.loop(minutes=10)
 async def check_inactive_users():
     now = datetime.now(timezone.utc)
@@ -332,7 +426,6 @@ async def daily_affection_bonus():
     asyncio.create_task(save_data())
 
 # ─── Event Handlers ─────────────────────────────────────────────────────────
-# REPLACE THIS FUNCTION WITH THE UPDATED VERSION
 @bot.event
 async def on_ready():
     print("A2 is online.")
@@ -342,8 +435,9 @@ async def on_ready():
     decay_annoyance.start()
     daily_affection_bonus.start()
     
-    # Load DM settings
+    # Load DM settings and Sam profile
     await load_dm_settings()
+    await load_sam_profile()
     
     # Initialize recent_responses for each user
     global recent_responses
@@ -358,15 +452,38 @@ async def on_command_error(ctx,error):
 
 @bot.event
 async def on_message(message):
-    if message.author.bot or message.content.startswith("A2:"): return
-    uid,content=message.author.id,message.content.strip()
-    is_cmd=any(content.startswith(p) for p in PREFIXES)
-    is_mention=bot.user in message.mentions
-    if not should_respond_to(content,uid,is_cmd,is_mention): return
+    if message.author.bot or message.content.startswith("A2:"): 
+        return
+    
+    uid, content = message.author.id, message.content.strip()
+    
+    # Check for Faded Sam mentions
+    lower_content = content.lower()
+    if FEARED_NAME in lower_content:
+        global sam_mentions_count
+        sam_mentions_count += 1
+        
+        # First, try to extract information
+        info_extracted = extract_sam_info(content)
+        
+        # If it's just a mention without useful info, or if the message is short, show fear
+        if not info_extracted or len(content) < 30:
+            await message.channel.send(f"A2: {random.choice(FEAR_RESPONSES)}")
+            await save_sam_profile()
+            return  # Skip normal processing
+    
+    # Normal message processing continues
+    is_cmd = any(content.startswith(p) for p in PREFIXES)
+    is_mention = bot.user in message.mentions
+    if not should_respond_to(content, uid, is_cmd, is_mention): 
+        return
+    
     await bot.process_commands(message)
-    if is_cmd: return
-    trust=user_emotions.get(uid,{}).get("trust",0)
-    resp=await generate_a2_response(content,trust,uid)
+    if is_cmd: 
+        return
+    
+    trust = user_emotions.get(uid, {}).get("trust", 0)
+    resp = await generate_a2_response(content, trust, uid)
     await message.channel.send(f"A2: {resp}")
 
 # ─── Commands ───────────────────────────────────────────────────────────────
@@ -429,7 +546,6 @@ async def clear_responses(ctx, member: discord.Member = None):
     else:
         await ctx.send(f"A2: No stored responses for {target.mention}.")
 
-# ADD THESE NEW COMMANDS
 @bot.command(name="enable_dm", aliases=["dms_on"], help="Enable A2 to send you direct messages")
 async def enable_dm(ctx):
     DM_ENABLED_USERS.add(ctx.author.id)
@@ -446,6 +562,41 @@ async def disable_dm(ctx):
 async def dm_status(ctx):
     status = "enabled" if ctx.author.id in DM_ENABLED_USERS else "disabled"
     await ctx.send(f"A2: Your DMs are currently {status}.")
+
+@bot.command(name="sam_profile", help="View the compiled profile of Faded Sam")
+async def view_sam_profile(ctx):
+    if not sam_profile:
+        return await ctx.send("A2: *tenses up* ...No information to share about that entity.")
+    
+    embed = discord.Embed(
+        title="Faded Sam Profile", 
+        description=f"*A2 seems uncomfortable sharing this information*\nMentions: {sam_mentions_count}",
+        color=discord.Color.dark_red()
+    )
+    
+    for category, entries in sam_profile.items():
+        if entries:
+            # Format the entries nicely, limit to 5 per category
+            formatted_entries = "\n• ".join(entries[:5])
+            if len(entries) > 5:
+                formatted_entries += f"\n• ... ({len(entries) - 5} more)"
+            
+            embed.add_field(
+                name=category.capitalize(),
+                value=f"• {formatted_entries}",
+                inline=False
+            )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="reset_sam", help="Reset the Faded Sam profile")
+async def reset_sam_profile(ctx):
+    # You might want to add permission checks here
+    global sam_profile, sam_mentions_count
+    sam_profile = defaultdict(list)
+    sam_mentions_count = 0
+    await save_sam_profile()
+    await ctx.send("A2: *looks relieved* ...Deleted.")
 
 if __name__=="__main__":
     bot.run(DISCORD_BOT_TOKEN)
