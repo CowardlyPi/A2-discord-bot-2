@@ -114,6 +114,7 @@ USER_PROFILES_DIR = USERS_DIR / "user_profiles"
 USER_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 CONVERSATIONS_DIR = USERS_DIR / "conversations"
 CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
+
 class UserProfile:
     """Stores detailed information about users that A2 interacts with"""
     
@@ -624,145 +625,145 @@ class StorageManager:
     async def save_dm_settings(self, dm_enabled_users):
         """Save DM permission settings"""
         return await self.save_file(self.dm_settings_file, {"enabled_users": list(dm_enabled_users)})
+    
+    async def load_data(self, emotion_manager, conversation_manager):
+        """Load all user data with improved error handling"""
+        # Initialize containers
+        emotion_manager.user_emotions = {}
+        emotion_manager.user_memories = defaultdict(list)
+        emotion_manager.user_events = defaultdict(list)
+        emotion_manager.user_milestones = defaultdict(list)
+        emotion_manager.interaction_stats = defaultdict(Counter)
+        emotion_manager.relationship_progress = defaultdict(dict)
         
-async def load_data(self, emotion_manager, conversation_manager):
-    """Load all user data with improved error handling"""
-    # Initialize containers
-    emotion_manager.user_emotions = {}
-    emotion_manager.user_memories = defaultdict(list)
-    emotion_manager.user_events = defaultdict(list)
-    emotion_manager.user_milestones = defaultdict(list)
-    emotion_manager.interaction_stats = defaultdict(Counter)
-    emotion_manager.relationship_progress = defaultdict(dict)
-    
-    # Ensure directories exist
-    if not self.verify_data_directories():
-        print("ERROR: Data directories not available. Memory functions disabled.")
-        return False
-    
-    print("Beginning data load process...")
-    
-    # Load profile data
-    profile_count = 0
-    error_count = 0
-    for file in self.profiles_dir.glob("*.json"):
-        if "_" not in file.stem:  # Skip special files like _memories.json
+        # Ensure directories exist
+        if not self.verify_data_directories():
+            print("ERROR: Data directories not available. Memory functions disabled.")
+            return False
+        
+        print("Beginning data load process...")
+        
+        # Load profile data
+        profile_count = 0
+        error_count = 0
+        for file in self.profiles_dir.glob("*.json"):
+            if "_" not in file.stem:  # Skip special files like _memories.json
+                try:
+                    uid = int(file.stem)
+                    file_content = file.read_text(encoding="utf-8")
+                    if not file_content.strip():
+                        print(f"Warning: Empty file {file}")
+                        continue
+                        
+                    data = json.loads(file_content)
+                    emotion_manager.user_emotions[uid] = data
+                    
+                    # Extract relationship data if present
+                    if "relationship" in data:
+                        emotion_manager.relationship_progress[uid] = data.get("relationship", {})
+                    
+                    # Extract interaction stats if present
+                    if "interaction_stats" in data:
+                        emotion_manager.interaction_stats[uid] = Counter(data.get("interaction_stats", {}))
+                        
+                    profile_count += 1
+                except Exception as e:
+                    error_count += 1
+                    print(f"Error loading profile {file}: {e}")
+        
+        print(f"Loaded {profile_count} profiles with {error_count} errors")
+        
+        # Load memories data
+        memory_count = 0
+        for file in self.profiles_dir.glob("*_memories.json"):
             try:
-                uid = int(file.stem)
+                uid = int(file.stem.split("_")[0])
                 file_content = file.read_text(encoding="utf-8")
-                if not file_content.strip():
-                    print(f"Warning: Empty file {file}")
-                    continue
-                    
-                data = json.loads(file_content)
-                emotion_manager.user_emotions[uid] = data
-                
-                # Extract relationship data if present
-                if "relationship" in data:
-                    emotion_manager.relationship_progress[uid] = data.get("relationship", {})
-                
-                # Extract interaction stats if present
-                if "interaction_stats" in data:
-                    emotion_manager.interaction_stats[uid] = Counter(data.get("interaction_stats", {}))
-                    
-                profile_count += 1
+                if file_content.strip():
+                    emotion_manager.user_memories[uid] = json.loads(file_content)
+                    memory_count += 1
             except Exception as e:
-                error_count += 1
-                print(f"Error loading profile {file}: {e}")
-    
-    print(f"Loaded {profile_count} profiles with {error_count} errors")
-    
-    # Load memories data
-    memory_count = 0
-    for file in self.profiles_dir.glob("*_memories.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            file_content = file.read_text(encoding="utf-8")
-            if file_content.strip():
-                emotion_manager.user_memories[uid] = json.loads(file_content)
-                memory_count += 1
-        except Exception as e:
-            print(f"Error loading memories {file}: {e}")
-    
-    # Load events data
-    events_count = 0
-    for file in self.profiles_dir.glob("*_events.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            file_content = file.read_text(encoding="utf-8")
-            if file_content.strip():
-                emotion_manager.user_events[uid] = json.loads(file_content)
-                events_count += 1
-        except Exception as e:
-            print(f"Error loading events {file}: {e}")
-    
-    # Load milestones data
-    milestones_count = 0
-    for file in self.profiles_dir.glob("*_milestones.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            file_content = file.read_text(encoding="utf-8")
-            if file_content.strip():
-                emotion_manager.user_milestones[uid] = json.loads(file_content)
-                milestones_count += 1
-        except Exception as e:
-            print(f"Error loading milestones {file}: {e}")
-    
-    # Load user profiles
-    profile_count = 0
-    for file in self.user_profiles_dir.glob("*_profile.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            file_content = file.read_text(encoding="utf-8")
-            if file_content.strip():
-                data = json.loads(file_content)
-                profile = UserProfile.from_dict(data)
-                conversation_manager.user_profiles[uid] = profile
-                profile_count += 1
-        except Exception as e:
-            print(f"Error loading user profile {file}: {e}")
-    print(f"Loaded {profile_count} user profiles")
+                print(f"Error loading memories {file}: {e}")
+        
+        # Load events data
+        events_count = 0
+        for file in self.profiles_dir.glob("*_events.json"):
+            try:
+                uid = int(file.stem.split("_")[0])
+                file_content = file.read_text(encoding="utf-8")
+                if file_content.strip():
+                    emotion_manager.user_events[uid] = json.loads(file_content)
+                    events_count += 1
+            except Exception as e:
+                print(f"Error loading events {file}: {e}")
+        
+        # Load milestones data
+        milestones_count = 0
+        for file in self.profiles_dir.glob("*_milestones.json"):
+            try:
+                uid = int(file.stem.split("_")[0])
+                file_content = file.read_text(encoding="utf-8")
+                if file_content.strip():
+                    emotion_manager.user_milestones[uid] = json.loads(file_content)
+                    milestones_count += 1
+            except Exception as e:
+                print(f"Error loading milestones {file}: {e}")
+        
+        # Load user profiles
+        profile_count = 0
+        for file in self.user_profiles_dir.glob("*_profile.json"):
+            try:
+                uid = int(file.stem.split("_")[0])
+                file_content = file.read_text(encoding="utf-8")
+                if file_content.strip():
+                    data = json.loads(file_content)
+                    profile = UserProfile.from_dict(data)
+                    conversation_manager.user_profiles[uid] = profile
+                    profile_count += 1
+            except Exception as e:
+                print(f"Error loading user profile {file}: {e}")
+        print(f"Loaded {profile_count} user profiles")
 
-    # Load conversation data
-    conversation_count = 0
-    for file in self.conversations_dir.glob("*_conversations.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            file_content = file.read_text(encoding="utf-8")
-            if file_content.strip():
-                conversation_manager.conversations[uid] = json.loads(file_content)
-                conversation_count += 1
-        except Exception as e:
-            print(f"Error loading conversation {file}: {e}")
+        # Load conversation data
+        conversation_count = 0
+        for file in self.conversations_dir.glob("*_conversations.json"):
+            try:
+                uid = int(file.stem.split("_")[0])
+                file_content = file.read_text(encoding="utf-8")
+                if file_content.strip():
+                    conversation_manager.conversations[uid] = json.loads(file_content)
+                    conversation_count += 1
+            except Exception as e:
+                print(f"Error loading conversation {file}: {e}")
 
-    # Load conversation summaries
-    summary_count = 0
-    for file in self.conversations_dir.glob("*_summary.json"):
-        try:
-            uid = int(file.stem.split("_")[0])
-            file_content = file.read_text(encoding="utf-8")
-            if file_content.strip():
-                data = json.loads(file_content)
-                conversation_manager.conversation_summaries[uid] = data.get("summary", "")
-                summary_count += 1
-        except Exception as e:
-            print(f"Error loading conversation summary {file}: {e}")
+        # Load conversation summaries
+        summary_count = 0
+        for file in self.conversations_dir.glob("*_summary.json"):
+            try:
+                uid = int(file.stem.split("_")[0])
+                file_content = file.read_text(encoding="utf-8")
+                if file_content.strip():
+                    data = json.loads(file_content)
+                    conversation_manager.conversation_summaries[uid] = data.get("summary", "")
+                    summary_count += 1
+            except Exception as e:
+                print(f"Error loading conversation summary {file}: {e}")
 
-    print(f"Loaded {conversation_count} conversations and {summary_count} summaries")
+        print(f"Loaded {conversation_count} conversations and {summary_count} summaries")
 
-    print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
-    
-    # Add any missing fields to existing user data
-    for uid in emotion_manager.user_emotions:
-        if "first_interaction" not in emotion_manager.user_emotions[uid]:
-            emotion_manager.user_emotions[uid]["first_interaction"] = emotion_manager.user_emotions[uid].get(
-                "last_interaction", datetime.now(timezone.utc).isoformat())
-    
-    # Load DM settings
-    emotion_manager.dm_enabled_users = await self.load_dm_settings()
-    
-    print("Data load complete")
-    return profile_count > 0  # Return success indicator
+        print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
+        
+        # Add any missing fields to existing user data
+        for uid in emotion_manager.user_emotions:
+            if "first_interaction" not in emotion_manager.user_emotions[uid]:
+                emotion_manager.user_emotions[uid]["first_interaction"] = emotion_manager.user_emotions[uid].get(
+                    "last_interaction", datetime.now(timezone.utc).isoformat())
+        
+        # Load DM settings
+        emotion_manager.dm_enabled_users = await self.load_dm_settings()
+        
+        print("Data load complete")
+        return profile_count > 0  # Return success indicator
         
     async def save_data(self, emotion_manager, conversation_manager):
         """Save all user data with improved error handling"""
@@ -1348,6 +1349,89 @@ class EmotionManager:
         # Save if storage manager is provided
         if storage_manager:
             await storage_manager.save_data(self, None)  # null for conversation_manager to avoid circular reference
+            
+    # Add missing methods referenced in background tasks
+    async def decay_affection(self, storage_manager=None):
+        """Decay affection points over time"""
+        now = datetime.now(timezone.utc)
+        for uid, e in self.user_emotions.items():
+            # Only decay if below annoyance threshold
+            if e.get('annoyance', 0) < EMOTION_CONFIG["ANNOYANCE_THRESHOLD"]:
+                # Calculate hours since last interaction
+                last = datetime.fromisoformat(e.get('last_interaction', now.isoformat()))
+                hours_passed = (now - last).total_seconds() / 3600
+                
+                # Apply decay
+                if hours_passed > 1:
+                    decay = int(EMOTION_CONFIG["AFFECTION_DECAY_RATE"] * hours_passed)
+                    e['affection_points'] = max(-100, e.get('affection_points', 0) - decay)
+                    
+                    # Also decay relationship stats
+                    for stat, multiplier in EMOTION_CONFIG["DECAY_MULTIPLIERS"].items():
+                        if stat in e and e[stat] > 0:
+                            decay_factor = (1 - multiplier) * (hours_passed / 24)  # Scale by days
+                            e[stat] = max(0, e[stat] - decay_factor)
+                            
+        # Save if storage manager is provided
+        if storage_manager:
+            await storage_manager.save_data(self, None)  # null for conversation_manager to avoid circular reference
+    
+    async def decay_annoyance(self, storage_manager=None):
+        """Decay annoyance over time"""
+        now = datetime.now(timezone.utc)
+        for uid, e in self.user_emotions.items():
+            if e.get('annoyance', 0) > 0:
+                # Calculate hours since last interaction
+                last = datetime.fromisoformat(e.get('last_interaction', now.isoformat()))
+                hours_passed = (now - last).total_seconds() / 3600
+                
+                # Apply decay
+                if hours_passed > 1:
+                    decay = int(EMOTION_CONFIG["ANNOYANCE_DECAY_RATE"] * hours_passed)
+                    e['annoyance'] = max(0, e.get('annoyance', 0) - decay)
+                    
+        # Save if storage manager is provided
+        if storage_manager:
+            await storage_manager.save_data(self, None)
+    
+    async def daily_affection_bonus(self, storage_manager=None):
+        """Apply daily affection bonus for trusted users"""
+        for uid, e in self.user_emotions.items():
+            if e.get('trust', 0) >= EMOTION_CONFIG["DAILY_BONUS_TRUST_THRESHOLD"]:
+                e['affection_points'] = min(1000, e.get('affection_points', 0) + EMOTION_CONFIG["DAILY_AFFECTION_BONUS"])
+                
+        # Save if storage manager is provided
+        if storage_manager:
+            await storage_manager.save_data(self, None)
+    
+    async def dynamic_emotional_adjustments(self, storage_manager=None):
+        """Make dynamic adjustments to emotional state based on history"""
+        for uid, e in self.user_emotions.items():
+            # Consider emotion history if available
+            if "emotion_history" in e and len(e["emotion_history"]) > 5:
+                # Calculate trend on trust
+                recent_entries = e["emotion_history"][-5:]
+                trust_values = [entry.get("trust", 0) for entry in recent_entries]
+                trust_diff = trust_values[-1] - trust_values[0]
+                
+                # Apply small adjustments based on trends
+                if trust_diff > 1:  # Increasing trust trend
+                    e["attachment"] = min(10, e.get("attachment", 0) + 0.2)
+                    e["resentment"] = max(0, e.get("resentment", 0) - 0.1)
+                elif trust_diff < -1:  # Decreasing trust trend
+                    e["resentment"] = min(10, e.get("resentment", 0) + 0.2)
+        
+        # Save if storage manager is provided
+        if storage_manager:
+            await storage_manager.save_data(self, None)
+    
+    async def environmental_mood_effects(self, storage_manager=None):
+        """Apply environmental effects to mood"""
+        # This is a placeholder method that could implement season/time of day effects
+        # or other environmental factors that might affect A2's emotional state
+        # For now, it does nothing but it's included so the background task doesn't fail
+        if storage_manager:
+            await storage_manager.save_data(self, None)
 
 class ResponseGenerator:
     """Handles conversation management and response generation"""
@@ -1894,7 +1978,7 @@ class A2Bot:
             else:
                 await ctx.send("A2: Error reloading memory data.")
 
-        @self.bot.command(name="create_test_memory")
+@self.bot.command(name="create_test_memory")
         async def create_test_memory(ctx):
             """Create a test memory to verify the memory system is working"""
             uid = ctx.author.id
@@ -2035,7 +2119,7 @@ class A2Bot:
                     inline=False
                 )
             
-           await ctx.send(embed=embed)
+            await ctx.send(embed=embed)
 
         @self.bot.command(name="milestones")
         async def show_milestones(ctx):
@@ -2488,6 +2572,3 @@ class A2Bot:
     def run(self):
         """Run the bot"""
         self.bot.run(self.token)
-
-
-
