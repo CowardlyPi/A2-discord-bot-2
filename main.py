@@ -708,7 +708,7 @@ class StorageManager:
             except Exception as e:
                 print(f"Error loading milestones {file}: {e}")
         
-     # Load user profiles
+    # Load user profiles
 profile_count = 0
 for file in self.user_profiles_dir.glob("*_profile.json"):
     try:
@@ -721,38 +721,36 @@ for file in self.user_profiles_dir.glob("*_profile.json"):
             profile_count += 1
     except Exception as e:
         print(f"Error loading user profile {file}: {e}")
-
 print(f"Loaded {profile_count} user profiles")
-        
-        # Load conversation data
-        conversation_count = 0
-        for file in self.conversations_dir.glob("*_conversations.json"):
-            try:
-                uid = int(file.stem.split("_")[0])
-                file_content = file.read_text(encoding="utf-8")
-                if file_content.strip():
-                    conversation_manager.conversations[uid] = json.loads(file_content)
-                    conversation_count += 1
-            except Exception as e:
-                print(f"Error loading conversation {file}: {e}")
-        
-        # Load conversation summaries
-        summary_count = 0
-        for file in self.conversations_dir.glob("*_summary.json"):
-            try:
-                uid = int(file.stem.split("_")[0])
-                file_content = file.read_text(encoding="utf-8")
-                if file_content.strip():
-                    data = json.loads(file_content)
-                    conversation_manager.conversation_summaries[uid] = data.get("summary", "")
-                    summary_count += 1
-            except Exception as e:
-                print(f"Error loading conversation summary {file}: {e}")
-        
-        print(f"Loaded {conversation_count} conversations and {summary_count} summaries")
-        
-        print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
-        
+
+# Load conversation data
+conversation_count = 0
+for file in self.conversations_dir.glob("*_conversations.json"):
+    try:
+        uid = int(file.stem.split("_")[0])
+        file_content = file.read_text(encoding="utf-8")
+        if file_content.strip():
+            conversation_manager.conversations[uid] = json.loads(file_content)
+            conversation_count += 1
+    except Exception as e:
+        print(f"Error loading conversation {file}: {e}")
+
+# Load conversation summaries
+summary_count = 0
+for file in self.conversations_dir.glob("*_summary.json"):
+    try:
+        uid = int(file.stem.split("_")[0])
+        file_content = file.read_text(encoding="utf-8")
+        if file_content.strip():
+            data = json.loads(file_content)
+            conversation_manager.conversation_summaries[uid] = data.get("summary", "")
+            summary_count += 1
+    except Exception as e:
+        print(f"Error loading conversation summary {file}: {e}")
+
+print(f"Loaded {conversation_count} conversations and {summary_count} summaries")
+
+print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
         # Add any missing fields to existing user data
         for uid in emotion_manager.user_emotions:
             if "first_interaction" not in emotion_manager.user_emotions[uid]:
