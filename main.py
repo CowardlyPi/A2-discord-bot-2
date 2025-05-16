@@ -625,143 +625,144 @@ class StorageManager:
         """Save DM permission settings"""
         return await self.save_file(self.dm_settings_file, {"enabled_users": list(dm_enabled_users)})
         
-    async def load_data(self, emotion_manager, conversation_manager):
-        """Load all user data with improved error handling"""
-        # Initialize containers
-        emotion_manager.user_emotions = {}
-        emotion_manager.user_memories = defaultdict(list)
-        emotion_manager.user_events = defaultdict(list)
-        emotion_manager.user_milestones = defaultdict(list)
-        emotion_manager.interaction_stats = defaultdict(Counter)
-        emotion_manager.relationship_progress = defaultdict(dict)
-        
-        # Ensure directories exist
-        if not self.verify_data_directories():
-            print("ERROR: Data directories not available. Memory functions disabled.")
-            return False
-        
-        print("Beginning data load process...")
-        
-        # Load profile data
-        profile_count = 0
-        error_count = 0
-        for file in self.profiles_dir.glob("*.json"):
-            if "_" not in file.stem:  # Skip special files like _memories.json
-                try:
-                    uid = int(file.stem)
-                    file_content = file.read_text(encoding="utf-8")
-                    if not file_content.strip():
-                        print(f"Warning: Empty file {file}")
-                        continue
-                        
-                    data = json.loads(file_content)
-                    emotion_manager.user_emotions[uid] = data
+async def load_data(self, emotion_manager, conversation_manager):
+    """Load all user data with improved error handling"""
+    # Initialize containers
+    emotion_manager.user_emotions = {}
+    emotion_manager.user_memories = defaultdict(list)
+    emotion_manager.user_events = defaultdict(list)
+    emotion_manager.user_milestones = defaultdict(list)
+    emotion_manager.interaction_stats = defaultdict(Counter)
+    emotion_manager.relationship_progress = defaultdict(dict)
+    
+    # Ensure directories exist
+    if not self.verify_data_directories():
+        print("ERROR: Data directories not available. Memory functions disabled.")
+        return False
+    
+    print("Beginning data load process...")
+    
+    # Load profile data
+    profile_count = 0
+    error_count = 0
+    for file in self.profiles_dir.glob("*.json"):
+        if "_" not in file.stem:  # Skip special files like _memories.json
+            try:
+                uid = int(file.stem)
+                file_content = file.read_text(encoding="utf-8")
+                if not file_content.strip():
+                    print(f"Warning: Empty file {file}")
+                    continue
                     
-                    # Extract relationship data if present
-                    if "relationship" in data:
-                        emotion_manager.relationship_progress[uid] = data.get("relationship", {})
+                data = json.loads(file_content)
+                emotion_manager.user_emotions[uid] = data
+                
+                # Extract relationship data if present
+                if "relationship" in data:
+                    emotion_manager.relationship_progress[uid] = data.get("relationship", {})
+                
+                # Extract interaction stats if present
+                if "interaction_stats" in data:
+                    emotion_manager.interaction_stats[uid] = Counter(data.get("interaction_stats", {}))
                     
-                    # Extract interaction stats if present
-                    if "interaction_stats" in data:
-                        emotion_manager.interaction_stats[uid] = Counter(data.get("interaction_stats", {}))
-                        
-                    profile_count += 1
-                except Exception as e:
-                    error_count += 1
-                    print(f"Error loading profile {file}: {e}")
-        
-        print(f"Loaded {profile_count} profiles with {error_count} errors")
-        
-        # Load memories data
-        memory_count = 0
-        for file in self.profiles_dir.glob("*_memories.json"):
-            try:
-                uid = int(file.stem.split("_")[0])
-                file_content = file.read_text(encoding="utf-8")
-                if file_content.strip():
-                    emotion_manager.user_memories[uid] = json.loads(file_content)
-                    memory_count += 1
+                profile_count += 1
             except Exception as e:
-                print(f"Error loading memories {file}: {e}")
-        
-        # Load events data
-        events_count = 0
-        for file in self.profiles_dir.glob("*_events.json"):
-            try:
-                uid = int(file.stem.split("_")[0])
-                file_content = file.read_text(encoding="utf-8")
-                if file_content.strip():
-                    emotion_manager.user_events[uid] = json.loads(file_content)
-                    events_count += 1
-            except Exception as e:
-                print(f"Error loading events {file}: {e}")
-        
-        # Load milestones data
-        milestones_count = 0
-        for file in self.profiles_dir.glob("*_milestones.json"):
-            try:
-                uid = int(file.stem.split("_")[0])
-                file_content = file.read_text(encoding="utf-8")
-                if file_content.strip():
-                    emotion_manager.user_milestones[uid] = json.loads(file_content)
-                    milestones_count += 1
-            except Exception as e:
-                print(f"Error loading milestones {file}: {e}")
-        
+                error_count += 1
+                print(f"Error loading profile {file}: {e}")
+    
+    print(f"Loaded {profile_count} profiles with {error_count} errors")
+    
+    # Load memories data
+    memory_count = 0
+    for file in self.profiles_dir.glob("*_memories.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                emotion_manager.user_memories[uid] = json.loads(file_content)
+                memory_count += 1
+        except Exception as e:
+            print(f"Error loading memories {file}: {e}")
+    
+    # Load events data
+    events_count = 0
+    for file in self.profiles_dir.glob("*_events.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                emotion_manager.user_events[uid] = json.loads(file_content)
+                events_count += 1
+        except Exception as e:
+            print(f"Error loading events {file}: {e}")
+    
+    # Load milestones data
+    milestones_count = 0
+    for file in self.profiles_dir.glob("*_milestones.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                emotion_manager.user_milestones[uid] = json.loads(file_content)
+                milestones_count += 1
+        except Exception as e:
+            print(f"Error loading milestones {file}: {e}")
+    
     # Load user profiles
-profile_count = 0
-for file in self.user_profiles_dir.glob("*_profile.json"):
-    try:
-        uid = int(file.stem.split("_")[0])
-        file_content = file.read_text(encoding="utf-8")
-        if file_content.strip():
-            data = json.loads(file_content)
-            profile = UserProfile.from_dict(data)
-            conversation_manager.user_profiles[uid] = profile
-            profile_count += 1
-    except Exception as e:
-        print(f"Error loading user profile {file}: {e}")
-print(f"Loaded {profile_count} user profiles")
+    profile_count = 0
+    for file in self.user_profiles_dir.glob("*_profile.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                data = json.loads(file_content)
+                profile = UserProfile.from_dict(data)
+                conversation_manager.user_profiles[uid] = profile
+                profile_count += 1
+        except Exception as e:
+            print(f"Error loading user profile {file}: {e}")
+    print(f"Loaded {profile_count} user profiles")
 
-# Load conversation data
-conversation_count = 0
-for file in self.conversations_dir.glob("*_conversations.json"):
-    try:
-        uid = int(file.stem.split("_")[0])
-        file_content = file.read_text(encoding="utf-8")
-        if file_content.strip():
-            conversation_manager.conversations[uid] = json.loads(file_content)
-            conversation_count += 1
-    except Exception as e:
-        print(f"Error loading conversation {file}: {e}")
+    # Load conversation data
+    conversation_count = 0
+    for file in self.conversations_dir.glob("*_conversations.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                conversation_manager.conversations[uid] = json.loads(file_content)
+                conversation_count += 1
+        except Exception as e:
+            print(f"Error loading conversation {file}: {e}")
 
-# Load conversation summaries
-summary_count = 0
-for file in self.conversations_dir.glob("*_summary.json"):
-    try:
-        uid = int(file.stem.split("_")[0])
-        file_content = file.read_text(encoding="utf-8")
-        if file_content.strip():
-            data = json.loads(file_content)
-            conversation_manager.conversation_summaries[uid] = data.get("summary", "")
-            summary_count += 1
-    except Exception as e:
-        print(f"Error loading conversation summary {file}: {e}")
+    # Load conversation summaries
+    summary_count = 0
+    for file in self.conversations_dir.glob("*_summary.json"):
+        try:
+            uid = int(file.stem.split("_")[0])
+            file_content = file.read_text(encoding="utf-8")
+            if file_content.strip():
+                data = json.loads(file_content)
+                conversation_manager.conversation_summaries[uid] = data.get("summary", "")
+                summary_count += 1
+        except Exception as e:
+            print(f"Error loading conversation summary {file}: {e}")
 
-print(f"Loaded {conversation_count} conversations and {summary_count} summaries")
+    print(f"Loaded {conversation_count} conversations and {summary_count} summaries")
 
-print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
-        # Add any missing fields to existing user data
-        for uid in emotion_manager.user_emotions:
-            if "first_interaction" not in emotion_manager.user_emotions[uid]:
-                emotion_manager.user_emotions[uid]["first_interaction"] = emotion_manager.user_emotions[uid].get(
-                    "last_interaction", datetime.now(timezone.utc).isoformat())
-        
-        # Load DM settings
-        emotion_manager.dm_enabled_users = await self.load_dm_settings()
-        
-        print("Data load complete")
-        return profile_count > 0  # Return success indicator
+    print(f"Loaded {memory_count} memory files, {events_count} event files, {milestones_count} milestone files")
+    
+    # Add any missing fields to existing user data
+    for uid in emotion_manager.user_emotions:
+        if "first_interaction" not in emotion_manager.user_emotions[uid]:
+            emotion_manager.user_emotions[uid]["first_interaction"] = emotion_manager.user_emotions[uid].get(
+                "last_interaction", datetime.now(timezone.utc).isoformat())
+    
+    # Load DM settings
+    emotion_manager.dm_enabled_users = await self.load_dm_settings()
+    
+    print("Data load complete")
+    return profile_count > 0  # Return success indicator
         
     async def save_data(self, emotion_manager, conversation_manager):
         """Save all user data with improved error handling"""
