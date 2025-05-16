@@ -1978,7 +1978,7 @@ class A2Bot:
             else:
                 await ctx.send("A2: Error reloading memory data.")
 
-@self.bot.command(name="create_test_memory")
+        @self.bot.command(name="create_test_memory")
         async def create_test_memory(ctx):
             """Create a test memory to verify the memory system is working"""
             uid = ctx.author.id
