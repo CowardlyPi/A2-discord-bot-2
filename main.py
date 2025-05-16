@@ -708,21 +708,21 @@ class StorageManager:
             except Exception as e:
                 print(f"Error loading milestones {file}: {e}")
         
-        # Load user profiles
-        profile_count = 0
-        for file in self.user_profiles_dir.glob("*_profile.json"):
-            try:
-                uid = int(file.stem.split("_")[0])
-                file_content = file.read_text(encoding="utf-8")
-                if file_content.strip():
-                    data = json.loads(file_content)
-                    profile = UserProfile.from_dict(data)
-                    conversation_manager.user_profiles[uid] = profile
-                    profile_count += 1
-                    except Exception as e:
-                print(f"Error loading user profile {file}: {e}")
-        
-        print(f"Loaded {profile_count} user profiles")
+     # Load user profiles
+profile_count = 0
+for file in self.user_profiles_dir.glob("*_profile.json"):
+    try:
+        uid = int(file.stem.split("_")[0])
+        file_content = file.read_text(encoding="utf-8")
+        if file_content.strip():
+            data = json.loads(file_content)
+            profile = UserProfile.from_dict(data)
+            conversation_manager.user_profiles[uid] = profile
+            profile_count += 1
+    except Exception as e:
+        print(f"Error loading user profile {file}: {e}")
+
+print(f"Loaded {profile_count} user profiles")
         
         # Load conversation data
         conversation_count = 0
